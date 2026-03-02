@@ -177,6 +177,25 @@ def parse_families(file) -> pd.DataFrame:
     grupo_col   = col_lower.get('columna1', col_lower.get('grupo', col_lower.get('group',
                    col_lower.get('vertical', col_lower.get('categoria', None)))))
 
+    def candidate_brand_keys(raw_value: str) -> set[str]:
+        """Build uppercase key variants to improve matching against detected brands."""
+        if raw_value is None:
+            return set()
+        txt = str(raw_value).strip()
+        if not txt or txt.lower() in ('nan', 'none', ''):
+            return set()
+
+        keys = set()
+        compact = re.sub(r'\s+', ' ', txt).strip().upper()
+        if compact:
+            keys.add(compact)
+
+        short = extract_short_name(txt)
+        short = re.sub(r'\s+', ' ', short).strip().upper()
+        if short:
+            keys.add(short)
+        return keys
+
     records = []
     for _, row in df.iterrows():
         grupo_raw = str(row[grupo_col]).strip() if grupo_col and pd.notna(row.get(grupo_col)) else ''
@@ -196,16 +215,13 @@ def parse_families(file) -> pd.DataFrame:
 
         # Primary key: extract_short_name from Familia column → uppercase → matches sales brand
         if familia_col and pd.notna(row.get(familia_col)):
-            familia_val = str(row[familia_col]).strip()
-            brand_key = extract_short_name(familia_val)  # already uppercase
-            if brand_key and brand_key not in ('', 'NAN'):
+            for brand_key in candidate_brand_keys(row[familia_col]):
                 records.append({'brand_key': brand_key, 'grupo': grupo})
 
         # Secondary key: Nombre column (title-cased display name) → uppercase
         if nombre_col and pd.notna(row.get(nombre_col)):
-            nombre_val = str(row[nombre_col]).strip().upper()
-            if nombre_val and nombre_val not in ('', 'NAN'):
-                records.append({'brand_key': nombre_val, 'grupo': grupo})
+            for brand_key in candidate_brand_keys(row[nombre_col]):
+                records.append({'brand_key': brand_key, 'grupo': grupo})
 
     result = pd.DataFrame(records).drop_duplicates(subset=['brand_key'])
     return result
