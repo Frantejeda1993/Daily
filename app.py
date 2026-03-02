@@ -38,15 +38,22 @@ st.set_page_config(
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
+[data-testid="stHeader"] { background: transparent; }
 [data-testid="stMetricValue"] { font-size: 1.4rem; font-weight: 700; }
-.block-container { padding-top: 1rem; padding-bottom: 1rem; }
+.block-container { padding-top: 3.25rem; padding-bottom: 1rem; }
+[data-baseweb="tab-list"] { margin-top: 0.5rem; }
 .kpi-card {
-    background: #f8f9fa; border-radius: 10px;
+    background: color-mix(in srgb, var(--secondary-background-color) 85%, transparent);
+    color: var(--text-color);
+    border-radius: 10px;
     padding: .9rem 1.1rem; margin-bottom: .4rem;
     border-left: 4px solid #4F81FF;
 }
-.positive { color: #16a34a; font-weight: 700; }
-.negative { color: #dc2626; font-weight: 700; }
+.positive { color: #22c55e; font-weight: 700; }
+.negative { color: #f87171; font-weight: 700; }
+.stMarkdown, .stText, p, label, .stMetricLabel, .stCaption {
+    color: var(--text-color) !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -472,6 +479,16 @@ with tab4: vertical_tab("Outdoor Tech")
 with tab5:
     st.header("Configuracion — Inputs Anuales")
 
+    # Marcas detectadas SOLO desde archivos de ventas (no budget)
+    known_brands: set = set()
+    for src in ["cy_sales", "ly_sales"]:
+        df_src = st.session_state.get(src)
+        if df_src is not None and "brand" in df_src.columns:
+            known_brands.update(df_src["brand"].dropna().unique().tolist())
+    noise = {"NAN", "", "SIN CLASIFICAR", "0 - SIN CLASIFICAR", "0", "NONE"}
+    known_brands -= noise
+    known_brands = {b for b in known_brands if isinstance(b, str) and b.strip()}
+
     # ── 1. Archivos anuales ────────────────────────
     st.subheader("1. Archivos Maestros (Anuales)")
     with st.expander("Cargar archivos anuales", expanded=True):
@@ -544,16 +561,25 @@ with tab5:
                     auto_map = {
                         row["brand_key"]: row["grupo"]
                         for _, row in fam_df.iterrows()
-                        if pd.notna(row.get("grupo")) and row["grupo"] in GROUPS
+                        if (
+                            pd.notna(row.get("grupo"))
+                            and row["grupo"] in GROUPS
+                            and row.get("brand_key") in known_brands
+                        )
                     }
-                    # Merge: imported values override existing
-                    merged_fm = {**st.session_state.get("family_map", {}), **auto_map}
+
+                    # Merge only for already-detected sales brands.
+                    existing = {
+                        k: v for k, v in st.session_state.get("family_map", {}).items()
+                        if k in known_brands
+                    }
+                    merged_fm = {**existing, **auto_map}
                     st.session_state["family_map"]  = merged_fm
                     st.session_state["_pending_fm"] = dict(merged_fm)
                     st.session_state["_processed_files"].add(fid)
                     _save_state("family_map", merged_fm)
                     st.success(
-                        f"{len(auto_map)} marcas importadas y asignadas automaticamente. "
+                        f"{len(auto_map)} marcas detectadas en ventas fueron completadas automaticamente. "
                         f"Revisa los desplegables y pulsa **Guardar** para recalcular."
                     )
                 except Exception as e:
@@ -561,19 +587,6 @@ with tab5:
             else:
                 # Show how many were imported
                 st.info("Archivo ya procesado.")
-
-    # ── Brand discovery (FIX #4: union, deduped, uppercase) ──────────────
-    known_brands: set = set()
-    for src in ["cy_sales", "ly_sales"]:
-        df_src = st.session_state.get(src)
-        if df_src is not None and "brand" in df_src.columns:
-            known_brands.update(df_src["brand"].dropna().unique().tolist())
-    bgt_df = st.session_state.get("budget")
-    if bgt_df is not None and "brand" in bgt_df.columns:
-        known_brands.update(bgt_df["brand"].dropna().unique().tolist())
-    noise = {"NAN","","SIN CLASIFICAR","0 - SIN CLASIFICAR","0","NONE","0 - SIN CLASIFICAR"}
-    known_brands -= noise
-    known_brands = {b for b in known_brands if b.strip()}
 
     if known_brands:
         brands_sorted = sorted(known_brands)

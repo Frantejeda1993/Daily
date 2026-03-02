@@ -13,6 +13,9 @@ import streamlit as st
 from google.cloud import storage
 from google.oauth2 import service_account
 
+
+FIRESTORE_CHUNK_SIZE = 900_000
+
 # ─────────────────────────────────────────────
 # BASIC AUTH
 # ─────────────────────────────────────────────
@@ -109,14 +112,36 @@ def _get_firestore_client():
 
 
 def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
-    """Upload binary payload to Firestore."""
+    """Upload binary payload to Firestore (chunked when needed)."""
     client = _get_firestore_client()
     if client is None:
         return False
     try:
         firestore = _firestore_module()
         doc_ref = client.collection(collection).document(key)
-        doc_ref.set({"payload": payload, "updated_at": firestore.SERVER_TIMESTAMP})
+
+        # Keep single-doc writes for small payloads (legacy-compatible format).
+        if len(payload) <= FIRESTORE_CHUNK_SIZE:
+            doc_ref.set({"payload": payload, "updated_at": firestore.SERVER_TIMESTAMP})
+            return True
+
+        chunks = [
+            payload[i:i + FIRESTORE_CHUNK_SIZE]
+            for i in range(0, len(payload), FIRESTORE_CHUNK_SIZE)
+        ]
+
+        # Root doc stores metadata only; payload bytes are saved in chunk subcollection.
+        doc_ref.set({
+            "chunked": True,
+            "chunk_count": len(chunks),
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        })
+
+        batch = client.batch()
+        for idx, chunk in enumerate(chunks):
+            chunk_ref = doc_ref.collection("chunks").document(f"{idx:05d}")
+            batch.set(chunk_ref, {"payload": chunk})
+        batch.commit()
         return True
     except Exception as e:
         st.error(f"Error guardando en Firestore: {e}")
@@ -133,6 +158,24 @@ def firestore_download_pickle(collection: str, key: str) -> bytes | None:
         if not doc.exists:
             return None
         data = doc.to_dict() or {}
+
+        if data.get("chunked"):
+            chunk_count = int(data.get("chunk_count", 0) or 0)
+            if chunk_count <= 0:
+                return None
+            chunk_docs = (
+                client.collection(collection)
+                .document(key)
+                .collection("chunks")
+                .stream()
+            )
+            chunks = {
+                d.id: bytes((d.to_dict() or {}).get("payload") or b"")
+                for d in chunk_docs
+            }
+            ordered = [chunks.get(f"{i:05d}", b"") for i in range(chunk_count)]
+            return b"".join(ordered) if all(ordered) else None
+
         payload = data.get("payload")
         return bytes(payload) if payload else None
     except Exception:
