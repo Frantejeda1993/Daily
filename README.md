@@ -28,13 +28,20 @@ kpi_app/
 ```toml
 # .streamlit/secrets.toml (o en el panel de Streamlit Cloud)
 
-[users]
-admin = "<sha256 de tu contraseña>"
-# Genera el hash con:
-# python -c "import hashlib; print(hashlib.sha256(b'tuContraseña').hexdigest())"
+APP_PASSWORD = "tu-contraseña-general"
 
-GCS_BUCKET = "nombre-de-tu-bucket"
-GCS_CREDENTIALS_JSON = """{ ... contenido JSON de tu service account ... }"""
+[firebase.service_account]
+type = "service_account"
+project_id = "daily-athena"
+private_key_id = "..."
+private_key = """-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"""
+client_email = "firebase-adminsdk-...@daily-athena.iam.gserviceaccount.com"
+client_id = "..."
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/..."
+universe_domain = "googleapis.com"
 ```
 
 5. Haz clic en **Deploy**.
@@ -68,8 +75,10 @@ gcloud run deploy kpi-dashboard \
   --region $REGION \
   --allow-unauthenticated \
   --service-account $SA_EMAIL \
+  --set-env-vars APP_PASSWORD="tu-contraseña-general" \
+  --set-env-vars FIREBASE_SERVICE_ACCOUNT_JSON="{...json_service_account...}" \
+  --set-env-vars FIRESTORE_COLLECTION="kpi_state" \
   --set-env-vars GCS_BUCKET=$BUCKET \
-  --set-env-vars AUTH_USERS='{"admin":"<sha256_hash>"}' \
   --memory 1Gi \
   --cpu 1 \
   --min-instances 0 \
@@ -80,17 +89,14 @@ gcloud run deploy kpi-dashboard \
 
 ---
 
-## 🔐 Gestión de usuarios
+## 🔐 Gestión de acceso
 
-Las contraseñas se almacenan como SHA-256.  
-Para añadir un usuario nuevo:
+La app usa **una contraseña general** definida en `APP_PASSWORD` (secrets o variable de entorno).
 
-```python
-import hashlib
-print(hashlib.sha256(b"miNuevaContraseña").hexdigest())
-```
+- En Streamlit Cloud: define `APP_PASSWORD` en secrets.
+- En otros entornos: exporta `APP_PASSWORD` como variable de entorno.
 
-Añade el par `usuario: hash` en `secrets.toml` o en la variable `AUTH_USERS` (JSON).
+> Si `APP_PASSWORD` no está configurada, en desarrollo local se permite `admin123` como fallback.
 
 ---
 
@@ -143,4 +149,4 @@ streamlit run app.py
 ```
 
 Accede en `http://localhost:8501`  
-Usuario por defecto: `admin` / contraseña: `admin123` *(cambiar en producción)*
+Contraseña de desarrollo por defecto (si no defines `APP_PASSWORD`): `admin123` *(cambiar en producción)*

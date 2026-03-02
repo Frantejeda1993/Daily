@@ -4,4 +4,5 @@ numpy>=1.26.0
 plotly>=5.22.0
 openpyxl>=3.1.2
 google-cloud-storage>=2.16.0
+google-cloud-firestore>=2.16.0
 xlrd>=2.0.1

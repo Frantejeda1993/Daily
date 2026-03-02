@@ -15,7 +15,13 @@ from data_processor import (
     parse_sales, parse_stock, parse_budget, parse_families,
     lfl_filter, merge_kpis, build_recap, project_month_end, summarise_sales,
 )
-from google_auth import login_page, gcs_upload, gcs_download
+from google_auth import (
+    login_page,
+    gcs_upload,
+    gcs_download,
+    firestore_upload_pickle,
+    firestore_download_pickle,
+)
 
 # ─────────────────────────────────────────────
 # PAGE CONFIG  — must be first Streamlit call
@@ -86,16 +92,23 @@ for k, v in _DEFAULTS.items():
 
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 GCS_PREFIX = "kpi_data/"
+FIRESTORE_COLLECTION = os.environ.get("FIRESTORE_COLLECTION", "kpi_state")
 
 # ─────────────────────────────────────────────
-# GCS PERSISTENCE
+# PERSISTENCE (Firestore first, GCS fallback)
 # ─────────────────────────────────────────────
 
-def _save_gcs(key, obj):
+def _save_state(key, obj):
+    payload = pickle.dumps(obj)
+    if firestore_upload_pickle(FIRESTORE_COLLECTION, key, payload):
+        return
     if GCS_BUCKET:
-        gcs_upload(GCS_BUCKET, GCS_PREFIX + key + ".pkl", pickle.dumps(obj))
+        gcs_upload(GCS_BUCKET, GCS_PREFIX + key + ".pkl", payload)
 
-def _load_gcs(key):
+def _load_state(key):
+    raw = firestore_download_pickle(FIRESTORE_COLLECTION, key)
+    if raw:
+        return pickle.loads(raw)
     if not GCS_BUCKET:
         return None
     raw = gcs_download(GCS_BUCKET, GCS_PREFIX + key + ".pkl")
@@ -103,11 +116,11 @@ def _load_gcs(key):
 
 def load_persisted_state():
     for k in ["cy_sales","ly_sales","stock_cy","stock_ly","budget","family_map","last_update"]:
-        val = _load_gcs(k)
+        val = _load_state(k)
         if val is not None:
             st.session_state[k] = val
 
-if GCS_BUCKET and st.session_state.get("cy_sales") is None:
+if st.session_state.get("cy_sales") is None:
     with st.spinner("Cargando datos guardados..."):
         load_persisted_state()
 
@@ -275,7 +288,7 @@ def stock_uploader_grid(state_key: str, label_prefix: str):
     if changed:
         st.session_state[state_key]          = stock_dict
         st.session_state["_processed_files"] = processed
-        _save_gcs(state_key, stock_dict)
+        _save_state(state_key, stock_dict)
         rebuild_kpis()
         # No st.rerun() here — let Streamlit re-render naturally
 
@@ -473,7 +486,7 @@ with tab5:
                         df_ly = parse_sales(ly_file)
                         st.session_state["ly_sales"] = df_ly
                         st.session_state["_processed_files"].add(fid)
-                        _save_gcs("ly_sales", df_ly)
+                        _save_state("ly_sales", df_ly)
                     rebuild_kpis()
                 ly_loaded = st.session_state.get("ly_sales")
                 if ly_loaded is not None:
@@ -489,7 +502,7 @@ with tab5:
                         df_bgt = parse_budget(bgt_file)
                         st.session_state["budget"] = df_bgt
                         st.session_state["_processed_files"].add(fid)
-                        _save_gcs("budget", df_bgt)
+                        _save_state("budget", df_bgt)
                     rebuild_kpis()
                 bgt_loaded = st.session_state.get("budget")
                 if bgt_loaded is not None:
@@ -538,7 +551,7 @@ with tab5:
                     st.session_state["family_map"]  = merged_fm
                     st.session_state["_pending_fm"] = dict(merged_fm)
                     st.session_state["_processed_files"].add(fid)
-                    _save_gcs("family_map", merged_fm)
+                    _save_state("family_map", merged_fm)
                     st.success(
                         f"{len(auto_map)} marcas importadas y asignadas automaticamente. "
                         f"Revisa los desplegables y pulsa **Guardar** para recalcular."
@@ -590,7 +603,7 @@ with tab5:
         if st.button("Guardar asignacion y recalcular KPIs", type="primary"):
             final_map = dict(st.session_state["_pending_fm"])
             st.session_state["family_map"] = final_map
-            _save_gcs("family_map", final_map)
+            _save_state("family_map", final_map)
             rebuild_kpis()
             st.success("Grupos guardados. KPIs actualizados.")
     else:
@@ -629,8 +642,8 @@ with tab6:
                 today_str = datetime.now().strftime("%Y-%m-%d %H:%M")
                 st.session_state["last_update"]    = today_str
                 st.session_state["_processed_files"].add(fid)
-                _save_gcs("cy_sales", df_cy)
-                _save_gcs("last_update", today_str)
+                _save_state("cy_sales", df_cy)
+                _save_state("last_update", today_str)
                 rebuild_kpis()
         cy_loaded = st.session_state.get("cy_sales")
         if cy_loaded is not None:
