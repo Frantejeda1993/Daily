@@ -1,49 +1,37 @@
 """
 google_auth.py
 Handles:
-  - Basic employee login (username/password via st.secrets or env vars)
-  - Google Cloud Storage upload / download helpers
+  - Basic app login (single shared password via st.secrets or env vars)
+  - Firebase Firestore upload / download helpers
+  - Google Cloud Storage upload / download helpers (legacy fallback)
 """
-import os
+import importlib
 import json
-import hashlib
+import os
+
 import streamlit as st
+from google.cloud import storage
+from google.oauth2 import service_account
 
 # ─────────────────────────────────────────────
 # BASIC AUTH
 # ─────────────────────────────────────────────
 
-def _get_users() -> dict:
-    """
-    Load user dict from st.secrets['users'] or AUTH_USERS env var.
-    Format: {"alice": "hashed_password", ...}
-    Passwords are SHA-256 hex strings.
-    To generate: python -c "import hashlib; print(hashlib.sha256(b'mypassword').hexdigest())"
-    """
-    try:
-        return dict(st.secrets.get("users", {}))
-    except Exception:
-        raw = os.environ.get("AUTH_USERS", "")
-        if raw:
-            try:
-                return json.loads(raw)
-            except json.JSONDecodeError:
-                pass
-    # Default dev credentials (admin / admin123) — change in production!
-    default_hash = hashlib.sha256(b"admin123").hexdigest()
-    return {"admin": default_hash}
+
+def _get_app_password() -> str:
+    """Load shared app password from Streamlit secrets or env var APP_PASSWORD."""
+    secret_password = st.secrets.get("APP_PASSWORD", "")
+    env_password = os.environ.get("APP_PASSWORD", "")
+    password = secret_password or env_password
+    return password.strip() if isinstance(password, str) else ""
 
 
-def hash_password(pw: str) -> str:
-    return hashlib.sha256(pw.encode()).hexdigest()
-
-
-def check_credentials(username: str, password: str) -> bool:
-    users = _get_users()
-    stored_hash = users.get(username.strip().lower())
-    if stored_hash is None:
-        return False
-    return hash_password(password) == stored_hash
+def check_credentials(password: str) -> bool:
+    app_password = _get_app_password()
+    if not app_password:
+        # Default dev credential for local testing only
+        return password == "admin123"
+    return password == app_password
 
 
 def login_page():
@@ -65,12 +53,11 @@ def login_page():
         st.markdown("<div class='login-box'>", unsafe_allow_html=True)
         st.title("🔐 KPI Dashboard")
         st.subheader("Iniciar sesión")
-        username = st.text_input("Usuario", key="login_user")
-        password = st.text_input("Contraseña", type="password", key="login_pw")
+        password = st.text_input("Contraseña general", type="password", key="login_pw")
         if st.button("Entrar", use_container_width=True):
-            if check_credentials(username, password):
+            if check_credentials(password):
                 st.session_state["authenticated"] = True
-                st.session_state["username"] = username.strip().lower()
+                st.session_state["username"] = "app_user"
                 st.rerun()
             else:
                 st.error("Credenciales incorrectas.")
@@ -80,18 +67,92 @@ def login_page():
 
 
 # ─────────────────────────────────────────────
-# GOOGLE CLOUD STORAGE
+# FIREBASE FIRESTORE
 # ─────────────────────────────────────────────
+
+
+def _get_firebase_service_account_info() -> dict | None:
+    """Read Firebase service account from Streamlit secrets or env JSON."""
+    try:
+        # Expected Streamlit Cloud format: [firebase.service_account]
+        if "firebase" in st.secrets and "service_account" in st.secrets["firebase"]:
+            return dict(st.secrets["firebase"]["service_account"])
+    except Exception:
+        pass
+
+    raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+    if raw:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _firestore_module():
+    return importlib.import_module("google.cloud.firestore")
+
+
+def _get_firestore_client():
+    """Return a Firestore client, or None if not configured."""
+    try:
+        firestore = _firestore_module()
+        service_account_info = _get_firebase_service_account_info()
+        if service_account_info:
+            credentials = service_account.Credentials.from_service_account_info(service_account_info)
+            project_id = service_account_info.get("project_id")
+            return firestore.Client(project=project_id, credentials=credentials)
+        return firestore.Client()
+    except Exception as e:
+        st.warning(f"Firestore no configurado: {e}")
+        return None
+
+
+def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
+    """Upload binary payload to Firestore."""
+    client = _get_firestore_client()
+    if client is None:
+        return False
+    try:
+        firestore = _firestore_module()
+        doc_ref = client.collection(collection).document(key)
+        doc_ref.set({"payload": payload, "updated_at": firestore.SERVER_TIMESTAMP})
+        return True
+    except Exception as e:
+        st.error(f"Error guardando en Firestore: {e}")
+        return False
+
+
+def firestore_download_pickle(collection: str, key: str) -> bytes | None:
+    """Download binary payload from Firestore. Returns None if not found."""
+    client = _get_firestore_client()
+    if client is None:
+        return None
+    try:
+        doc = client.collection(collection).document(key).get()
+        if not doc.exists:
+            return None
+        data = doc.to_dict() or {}
+        payload = data.get("payload")
+        return bytes(payload) if payload else None
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────
+# GOOGLE CLOUD STORAGE (legacy fallback)
+# ─────────────────────────────────────────────
+
 
 def _get_gcs_client():
     """Return a GCS client, or None if not configured."""
     try:
-        from google.cloud import storage
         # If running on Cloud Run, ADC is used automatically.
         # Locally, set GOOGLE_APPLICATION_CREDENTIALS env var.
         creds_json = os.environ.get("GCS_CREDENTIALS_JSON", "")
         if creds_json:
-            import tempfile, json as _json
+            import tempfile
+
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json", mode="w")
             tmp.write(creds_json)
             tmp.close()
