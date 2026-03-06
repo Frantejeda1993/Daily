@@ -153,15 +153,25 @@ def _save_state(key, obj):
 
 def _load_state(key):
     def _decode_payload(raw_payload):
-        if not raw_payload:
+        if raw_payload is None:
             return None
+
+        try:
+            if hasattr(raw_payload, "__len__") and len(raw_payload) == 0:
+                return None
+        except Exception:
+            # Some client wrappers can raise decoding/typing errors on len()/truthiness.
+            pass
 
         if isinstance(raw_payload, memoryview):
             raw_payload = raw_payload.tobytes()
         elif isinstance(raw_payload, bytearray):
             raw_payload = bytes(raw_payload)
         elif isinstance(raw_payload, str):
-            text_payload = raw_payload.strip()
+            try:
+                text_payload = raw_payload.strip()
+            except Exception:
+                text_payload = raw_payload
 
             # Some old deployments accidentally stored binary bytes as text.
             # Try to recover with the most common reversible encodings first.
@@ -178,6 +188,9 @@ def _load_state(key):
                     raw_payload = decoded_b64
             except Exception:
                 pass
+
+        if isinstance(raw_payload, dict):
+            return raw_payload
 
         if not isinstance(raw_payload, bytes):
             return None
