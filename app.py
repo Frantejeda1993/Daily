@@ -156,6 +156,23 @@ def _load_state(key):
         if not raw_payload:
             return None
 
+        if isinstance(raw_payload, memoryview):
+            raw_payload = raw_payload.tobytes()
+        elif isinstance(raw_payload, bytearray):
+            raw_payload = bytes(raw_payload)
+        elif isinstance(raw_payload, str):
+            raw_payload = raw_payload.encode("utf-8", errors="ignore")
+
+        if not isinstance(raw_payload, bytes):
+            return None
+
+        # Fast path for legacy pickled payloads (pickle protocol marker).
+        if raw_payload.startswith(b"\x80"):
+            try:
+                return pickle.loads(raw_payload)
+            except Exception:
+                pass
+
         # Preferred format: UTF-8 JSON payload written by _save_state.
         try:
             return json.loads(raw_payload.decode("utf-8"))
