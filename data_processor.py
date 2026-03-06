@@ -29,6 +29,18 @@ SALES_COL_MAP = {
 }
 
 
+
+
+def _validate_required_columns(df: pd.DataFrame, required: set[str], dataset_name: str) -> None:
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise ValueError(f"{dataset_name} missing required columns: {missing}")
+
+
+def _parse_european_numeric(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    s = s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+    return pd.to_numeric(s, errors='coerce')
 def parse_sales(file) -> pd.DataFrame:
     """
     Parse sales file (Excel or CSV).
@@ -43,15 +55,16 @@ def parse_sales(file) -> pd.DataFrame:
     df.columns = df.columns.str.strip()
     df = df.rename(columns=SALES_COL_MAP, errors='ignore')
 
-    if 'fecha' in df.columns:
-        df['fecha'] = pd.to_datetime(df['fecha'], dayfirst=True, errors='coerce')
+    _validate_required_columns(df, {'fecha', 'clave', 'importe'}, 'Sales file')
 
-    if 'clave' in df.columns:
-        df['brand'] = df['clave'].astype(str).apply(extract_short_name)
+    df['fecha'] = pd.to_datetime(df['fecha'], dayfirst=True, errors='coerce')
+    df['brand'] = df['clave'].astype(str).apply(extract_short_name)
 
     for col in ['importe', 'margen_pct_raw', 'margen_eur', 'unidades']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        elif col in {'importe'}:
+            raise ValueError(f"Sales file missing required numeric column: {col}")
         else:
             df[col] = 0.0
 
@@ -95,10 +108,8 @@ def parse_stock(file) -> pd.DataFrame:
         if 'importe' in cl and importe_col is None:
             importe_col = col
 
-    if clave_col is None:
-        clave_col = raw.columns[0]
-    if importe_col is None:
-        importe_col = raw.columns[min(2, len(raw.columns) - 1)]
+    if clave_col is None or importe_col is None:
+        raise ValueError("Stock file must contain 'Clave' and 'Importe' columns")
 
     result = raw[[clave_col, importe_col]].copy()
     result.columns = ['clave_raw', 'stock_value']
@@ -106,10 +117,7 @@ def parse_stock(file) -> pd.DataFrame:
     result = result[result['clave_raw'].str.strip().ne('')]
 
     result['brand'] = result['clave_raw'].astype(str).apply(extract_short_name)
-    result['stock_value'] = pd.to_numeric(
-        result['stock_value'].astype(str).str.replace(',', '.', regex=False),
-        errors='coerce',
-    ).fillna(0)
+    result['stock_value'] = _parse_european_numeric(result['stock_value']).fillna(0)
 
     return result.groupby('brand', as_index=False)['stock_value'].sum()
 
@@ -131,7 +139,9 @@ def parse_budget(file) -> pd.DataFrame:
     }, errors='ignore')
 
     if 'brand' not in df.columns:
-        df = df.rename(columns={df.columns[0]: 'brand'})
+        raise ValueError("Budget file missing required column: Marca/brand")
+
+    _validate_required_columns(df, {'brand', 'budget_revenue', 'budget_margin_pct'}, 'Budget file')
 
     for col in ['budget_revenue', 'budget_margin_pct']:
         if col in df.columns:
@@ -228,11 +238,11 @@ def parse_families(file) -> pd.DataFrame:
 
 
 def lfl_filter(df: pd.DataFrame, reference_date: date) -> pd.DataFrame:
-    ref_mmdd = (reference_date.month, reference_date.day)
-    mask = df['fecha'].apply(
-        lambda d: (d.month, d.day) <= ref_mmdd if pd.notna(d) else False
+    fecha = df['fecha']
+    mask = (fecha.dt.month < reference_date.month) | (
+        (fecha.dt.month == reference_date.month) & (fecha.dt.day <= reference_date.day)
     )
-    return df[mask]
+    return df[mask.fillna(False)]
 
 
 def summarise_sales(df: pd.DataFrame, group_col: str = 'brand') -> pd.DataFrame:
@@ -246,7 +256,7 @@ def summarise_sales(df: pd.DataFrame, group_col: str = 'brand') -> pd.DataFrame:
     return agg
 
 
-def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly):
+def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly, reference_date: date):
     cy = summarise_sales(cy_sales).rename(columns={
         'revenue': 'cy_revenue', 'margin_eur': 'cy_margin_eur', 'margin_pct': 'cy_margin_pct'})
     ly = summarise_sales(ly_sales).rename(columns={
@@ -278,7 +288,8 @@ def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly):
         merged['cy_revenue'] / merged['budget_revenue'], np.nan)
     merged['margin_delta_pts'] = merged['cy_margin_pct'] - merged['ly_margin_pct']
     merged['margin_delta_eur'] = merged['cy_margin_eur'] - merged['ly_margin_eur']
-    merged['daily_revenue_cy'] = merged['cy_revenue'] / 30
+    days_elapsed = max(reference_date.day, 1)
+    merged['daily_revenue_cy'] = merged['cy_revenue'] / days_elapsed
     merged['days_stock'] = np.where(
         merged['daily_revenue_cy'] > 0,
         merged['stock_cy'] / merged['daily_revenue_cy'], np.nan)
