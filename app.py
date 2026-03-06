@@ -125,6 +125,42 @@ def _serialize_state(key, obj):
 
 
 def _deserialize_state(serialized):
+    def _decode_dataframe_payload(df_payload):
+        if isinstance(df_payload, pd.DataFrame):
+            return df_payload
+
+        if isinstance(df_payload, str):
+            # Standard format produced by _serialize_state.
+            try:
+                return pd.read_json(df_payload, orient="split")
+            except (UnicodeDecodeError, ValueError):
+                pass
+
+            # Legacy format: binary payload accidentally persisted as text.
+            try:
+                df_payload = df_payload.encode("latin1")
+            except UnicodeEncodeError:
+                return None
+
+        if isinstance(df_payload, (bytes, bytearray, memoryview)):
+            raw_bytes = bytes(df_payload)
+
+            # Legacy pickled DataFrame payload.
+            if raw_bytes.startswith(b"\x80"):
+                try:
+                    unpickled = pickle.loads(raw_bytes)
+                    return unpickled if isinstance(unpickled, pd.DataFrame) else None
+                except Exception:
+                    return None
+
+            # Some payloads were stored as UTF-8 encoded JSON bytes.
+            try:
+                return pd.read_json(raw_bytes.decode("utf-8"), orient="split")
+            except (UnicodeDecodeError, ValueError):
+                return None
+
+        return None
+
     if not serialized:
         return None
 
@@ -140,19 +176,16 @@ def _deserialize_state(serialized):
     typ = serialized.get("type")
     value = serialized.get("value")
     if typ == "dataframe":
-        if isinstance(value, str):
-            return pd.read_json(value, orient="split")
-        return value if isinstance(value, pd.DataFrame) else None
+        return _decode_dataframe_payload(value)
     if typ == "stock_dict":
         if not isinstance(value, dict):
             return {}
         parsed = {}
         for month, df_json in value.items():
             month_int = int(month)
-            if isinstance(df_json, pd.DataFrame):
-                parsed[month_int] = df_json
-            elif isinstance(df_json, str):
-                parsed[month_int] = pd.read_json(df_json, orient="split")
+            decoded_df = _decode_dataframe_payload(df_json)
+            if decoded_df is not None:
+                parsed[month_int] = decoded_df
         return parsed
     if typ == "date":
         if isinstance(value, date):
