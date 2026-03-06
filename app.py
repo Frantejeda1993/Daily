@@ -284,7 +284,7 @@ def _load_state(key):
             return None
 
     raw = firestore_download_pickle(FIRESTORE_COLLECTION, key)
-    if raw:
+    if raw is not None:
         try:
             decoded = _decode_payload(raw)
             return _deserialize_state(decoded)
@@ -294,7 +294,7 @@ def _load_state(key):
         return None
     raw = gcs_download(GCS_BUCKET, GCS_PREFIX + key + ".json")
     try:
-        decoded = _decode_payload(raw) if raw else None
+        decoded = _decode_payload(raw) if raw is not None else None
         return _deserialize_state(decoded)
     except Exception:
         return None
