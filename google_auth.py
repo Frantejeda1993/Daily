@@ -24,6 +24,7 @@ FIRESTORE_CHUNK_SIZE = 600_000
 # intentionally sent one-by-one to guarantee each request stays below that limit
 # even for large pickles.
 MAX_LOGIN_ATTEMPTS = 5
+FIRESTORE_MAX_PAYLOAD_BYTES = 9_000_000
 
 
 def _coerce_binary_payload(payload) -> bytes:
@@ -241,6 +242,15 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
         payload_bytes = _coerce_binary_payload(payload)
         if not payload_bytes and payload not in (b"", "", None):
             payload_bytes = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+
+        if len(payload_bytes) > FIRESTORE_MAX_PAYLOAD_BYTES:
+            logger.warning(
+                "Skipping Firestore upload for key=%s: payload size %s exceeds safe request threshold %s",
+                key,
+                len(payload_bytes),
+                FIRESTORE_MAX_PAYLOAD_BYTES,
+            )
+            return False
 
         if len(payload_bytes) <= FIRESTORE_CHUNK_SIZE:
             doc_ref.set({"payload": payload_bytes, "updated_at": firestore.SERVER_TIMESTAMP})
