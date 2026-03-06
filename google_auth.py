@@ -19,6 +19,8 @@ from google.oauth2 import service_account
 
 logger = logging.getLogger(__name__)
 FIRESTORE_CHUNK_SIZE = 900_000
+FIRESTORE_BATCH_MAX_BYTES = 8_000_000
+FIRESTORE_BATCH_MAX_WRITES = 450
 MAX_LOGIN_ATTEMPTS = 5
 
 
@@ -250,10 +252,27 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
         })
 
         batch = client.batch()
+        batch_bytes = 0
+        batch_writes = 0
         for idx, chunk in enumerate(chunks):
             chunk_ref = doc_ref.collection("chunks").document(f"{idx:05d}")
+            chunk_size = len(chunk)
+
+            if (
+                batch_writes >= FIRESTORE_BATCH_MAX_WRITES
+                or (batch_writes > 0 and batch_bytes + chunk_size > FIRESTORE_BATCH_MAX_BYTES)
+            ):
+                batch.commit()
+                batch = client.batch()
+                batch_bytes = 0
+                batch_writes = 0
+
             batch.set(chunk_ref, {"payload": chunk})
-        batch.commit()
+            batch_writes += 1
+            batch_bytes += chunk_size
+
+        if batch_writes:
+            batch.commit()
         return True
     except Exception as e:
         logger.exception("Firestore upload failed for key=%s", key)
