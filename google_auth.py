@@ -10,6 +10,7 @@ import importlib
 import json
 import logging
 import os
+import pickle
 import time
 
 import streamlit as st
@@ -18,7 +19,7 @@ from google.oauth2 import service_account
 
 
 logger = logging.getLogger(__name__)
-FIRESTORE_CHUNK_SIZE = 700_000
+FIRESTORE_CHUNK_SIZE = 600_000
 # Firestore Commit requests have a hard payload limit (~10 MiB). Chunk writes are
 # intentionally sent one-by-one to guarantee each request stays below that limit
 # even for large pickles.
@@ -237,11 +238,18 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
         firestore = _firestore_module()
         doc_ref = client.collection(collection).document(key)
 
-        if len(payload) <= FIRESTORE_CHUNK_SIZE:
-            doc_ref.set({"payload": payload, "updated_at": firestore.SERVER_TIMESTAMP})
+        payload_bytes = _coerce_binary_payload(payload)
+        if not payload_bytes and payload not in (b"", "", None):
+            payload_bytes = pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL)
+
+        if len(payload_bytes) <= FIRESTORE_CHUNK_SIZE:
+            doc_ref.set({"payload": payload_bytes, "updated_at": firestore.SERVER_TIMESTAMP})
             return True
 
-        chunks = [payload[i:i + FIRESTORE_CHUNK_SIZE] for i in range(0, len(payload), FIRESTORE_CHUNK_SIZE)]
+        chunks = [
+            payload_bytes[i:i + FIRESTORE_CHUNK_SIZE]
+            for i in range(0, len(payload_bytes), FIRESTORE_CHUNK_SIZE)
+        ]
 
         # Mark as uploading to avoid readers consuming a half-written payload.
         doc_ref.set({
@@ -255,6 +263,8 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
             chunk_ref = doc_ref.collection("chunks").document(f"{idx:05d}")
             # Avoid batched commits here; a large batch can exceed Firestore's
             # request-size limit and fail the entire upload.
+            if len(chunk) > FIRESTORE_CHUNK_SIZE:
+                raise ValueError(f"Chunk {idx} exceeds configured size limit")
             chunk_ref.set({"payload": chunk})
 
         # Finalize only after all chunk writes have succeeded.
