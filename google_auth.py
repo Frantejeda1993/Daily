@@ -22,6 +22,27 @@ FIRESTORE_CHUNK_SIZE = 900_000
 MAX_LOGIN_ATTEMPTS = 5
 
 
+def _coerce_binary_payload(payload) -> bytes:
+    """Best-effort conversion for persisted payloads that may come back with mixed types."""
+    if payload is None:
+        return b""
+    if isinstance(payload, bytes):
+        return payload
+    if isinstance(payload, memoryview):
+        return payload.tobytes()
+    if isinstance(payload, bytearray):
+        return bytes(payload)
+    if isinstance(payload, str):
+        try:
+            return payload.encode("latin1")
+        except UnicodeEncodeError:
+            return payload.encode("utf-8", errors="ignore")
+    try:
+        return bytes(payload)
+    except Exception:
+        return b""
+
+
 def _has_adc_credentials() -> bool:
     """Return True when ADC env vars are explicitly configured."""
     return bool(
@@ -262,7 +283,7 @@ def firestore_download_pickle(collection: str, key: str) -> bytes | None:
                 .stream()
             )
             chunks = {
-                d.id: bytes((d.to_dict() or {}).get("payload") or b"")
+                d.id: _coerce_binary_payload((d.to_dict() or {}).get("payload"))
                 for d in chunk_docs
             }
             ordered = [chunks.get(f"{i:05d}", b"") for i in range(chunk_count)]
@@ -271,7 +292,8 @@ def firestore_download_pickle(collection: str, key: str) -> bytes | None:
             return b"".join(ordered)
 
         payload = data.get("payload")
-        return bytes(payload) if payload else None
+        coerced = _coerce_binary_payload(payload)
+        return coerced or None
     except Exception as exc:
         logger.exception("Firestore download failed for key=%s", key)
         st.error(f"Error cargando estado '{key}' desde Firestore: {exc}")
