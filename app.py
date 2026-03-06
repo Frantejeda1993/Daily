@@ -4,6 +4,7 @@ app.py — KPI Dashboard
 import hashlib
 import json
 import os
+import pickle
 from datetime import date, datetime
 
 import numpy as np
@@ -151,13 +152,31 @@ def _save_state(key, obj):
 
 
 def _load_state(key):
+    def _decode_payload(raw_payload):
+        if not raw_payload:
+            return None
+
+        # Preferred format: UTF-8 JSON payload written by _save_state.
+        try:
+            return json.loads(raw_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+
+        # Legacy compatibility: previously persisted pickled payloads.
+        try:
+            return pickle.loads(raw_payload)
+        except Exception:
+            return None
+
     raw = firestore_download_pickle(FIRESTORE_COLLECTION, key)
     if raw:
-        return _deserialize_state(json.loads(raw.decode("utf-8")))
+        decoded = _decode_payload(raw)
+        return _deserialize_state(decoded)
     if not GCS_BUCKET:
         return None
     raw = gcs_download(GCS_BUCKET, GCS_PREFIX + key + ".json")
-    return _deserialize_state(json.loads(raw.decode("utf-8"))) if raw else None
+    decoded = _decode_payload(raw) if raw else None
+    return _deserialize_state(decoded)
 
 
 def load_persisted_state():
