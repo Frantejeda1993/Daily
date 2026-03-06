@@ -127,13 +127,38 @@ def _serialize_state(key, obj):
 def _deserialize_state(serialized):
     if not serialized:
         return None
+
+    # Backward compatibility: some deployments persisted the value directly
+    # without an explicit wrapper metadata object.
+    if isinstance(serialized, pd.DataFrame):
+        return serialized
+    if isinstance(serialized, (list, str, int, float, bool, date)):
+        return serialized
+    if isinstance(serialized, dict) and "type" not in serialized and "value" not in serialized:
+        return serialized
+
     typ = serialized.get("type")
     value = serialized.get("value")
     if typ == "dataframe":
-        return pd.read_json(value, orient="split")
+        if isinstance(value, str):
+            return pd.read_json(value, orient="split")
+        return value if isinstance(value, pd.DataFrame) else None
     if typ == "stock_dict":
-        return {int(month): pd.read_json(df_json, orient="split") for month, df_json in value.items()}
+        if not isinstance(value, dict):
+            return {}
+        parsed = {}
+        for month, df_json in value.items():
+            month_int = int(month)
+            if isinstance(df_json, pd.DataFrame):
+                parsed[month_int] = df_json
+            elif isinstance(df_json, str):
+                parsed[month_int] = pd.read_json(df_json, orient="split")
+        return parsed
     if typ == "date":
+        if isinstance(value, date):
+            return value
+        if isinstance(value, datetime):
+            return value.date()
         return date.fromisoformat(value)
     if typ == "json":
         return value
@@ -167,6 +192,8 @@ def _load_state(key):
             raw_payload = raw_payload.tobytes()
         elif isinstance(raw_payload, bytearray):
             raw_payload = bytes(raw_payload)
+        elif isinstance(raw_payload, dict):
+            return raw_payload
         elif isinstance(raw_payload, str):
             try:
                 text_payload = raw_payload.strip()
@@ -175,10 +202,11 @@ def _load_state(key):
 
             # Some old deployments accidentally stored binary bytes as text.
             # Try to recover with the most common reversible encodings first.
+            # New format: JSON may be returned directly as unicode text.
             try:
-                raw_payload = text_payload.encode("latin1")
-            except UnicodeEncodeError:
-                raw_payload = text_payload.encode("utf-8", errors="ignore")
+                return json.loads(text_payload)
+            except Exception:
+                pass
 
             # Firestore/GCS tools may also expose payloads as base64 text.
             try:
@@ -186,11 +214,13 @@ def _load_state(key):
                 decoded_b64 = base64.b64decode(text_payload, validate=True)
                 if decoded_b64:
                     raw_payload = decoded_b64
+                else:
+                    raw_payload = text_payload.encode("latin1")
             except Exception:
-                pass
-
-        if isinstance(raw_payload, dict):
-            return raw_payload
+                try:
+                    raw_payload = text_payload.encode("latin1")
+                except UnicodeEncodeError:
+                    raw_payload = text_payload.encode("utf-8", errors="ignore")
 
         if not isinstance(raw_payload, bytes):
             return None
@@ -205,6 +235,12 @@ def _load_state(key):
         # Preferred format: UTF-8 JSON payload written by _save_state.
         try:
             return json.loads(raw_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+
+        # Compatibility: some wrappers decode bytes as latin-1 text.
+        try:
+            return json.loads(raw_payload.decode("latin1"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             pass
 
