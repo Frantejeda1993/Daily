@@ -244,23 +244,33 @@ def kpi_summary_table(df: pd.DataFrame, title: str = ""):
         return
     if title:
         st.markdown(f"### {title}")
-    want = ["brand","cy_revenue","ly_revenue","growth_real","cy_margin_pct",
-            "margin_delta_pts","cy_margin_eur","budget_revenue","budget_achievement",
-            "stock_cy","days_stock","projected_revenue"]
+    want = ["brand","brand_status","cy_revenue","ly_revenue","growth_real","cy_margin_pct",
+            "margin_delta_pts","cy_margin_eur","budget_revenue","budget_to_date_revenue",
+            "budget_achievement","budget_gap_eur","budget_gap_pct","mix_contribution_pct",
+            "margin_contribution_pct","cy_units","revenue_per_unit","margin_per_unit",
+            "stock_cy","days_stock","projected_revenue","metric_window"]
     cols = [c for c in want if c in df.columns]
     disp = df[cols].copy()
     rn = {
-        "brand":"Marca","cy_revenue":"Revenue CY","ly_revenue":"Revenue LY",
+        "brand":"Marca","brand_status":"Tipo Marca","cy_revenue":"Revenue CY","ly_revenue":"Revenue LY (LfL)",
         "growth_real":"Crec. Real","cy_margin_pct":"Margen% CY",
         "margin_delta_pts":"Delta Margen","cy_margin_eur":"Margen EUR CY",
-        "budget_revenue":"Budget","budget_achievement":"% Budget",
+        "budget_revenue":"Budget Anual","budget_to_date_revenue":"Budget To-Date",
+        "budget_achievement":"% Cumpl. Budget To-Date","budget_gap_eur":"Gap Budget €",
+        "budget_gap_pct":"Gap Budget %","mix_contribution_pct":"Mix % Revenue",
+        "margin_contribution_pct":"Contrib. Margen %","cy_units":"Unidades CY",
+        "revenue_per_unit":"Revenue/Unidad","margin_per_unit":"Margen/Unidad",
         "stock_cy":"Stock CY","days_stock":"Dias Stock","projected_revenue":"Proyeccion Mes",
+        "metric_window":"Ventana KPI",
     }
     disp = disp.rename(columns=rn)
     fmt_map = {
-        "Revenue CY": fmt_eur, "Revenue LY": fmt_eur, "Crec. Real": fmt_pct,
-        "Margen% CY": fmt_pct, "Margen EUR CY": fmt_eur, "Budget": fmt_eur,
-        "% Budget": fmt_pct, "Stock CY": fmt_eur, "Proyeccion Mes": fmt_eur,
+        "Revenue CY": fmt_eur, "Revenue LY (LfL)": fmt_eur, "Crec. Real": fmt_pct,
+        "Margen% CY": fmt_pct, "Margen EUR CY": fmt_eur, "Budget Anual": fmt_eur,
+        "Budget To-Date": fmt_eur, "% Cumpl. Budget To-Date": fmt_pct,
+        "Gap Budget €": fmt_eur, "Gap Budget %": fmt_pct, "Mix % Revenue": fmt_pct,
+        "Contrib. Margen %": fmt_pct, "Revenue/Unidad": fmt_eur, "Margen/Unidad": fmt_eur,
+        "Stock CY": fmt_eur, "Proyeccion Mes": fmt_eur,
     }
     for c, fn in fmt_map.items():
         if c in disp.columns:
@@ -383,7 +393,7 @@ with tab0:
         total_ly_rev    = kpi["ly_revenue"].sum()
         total_cy_mg_eur = kpi["cy_margin_eur"].sum()
         total_ly_mg_eur = kpi["ly_margin_eur"].sum()
-        total_budget    = kpi["budget_revenue"].sum()
+        total_budget    = kpi["budget_to_date_revenue"].sum()
         total_cy_mg_pct = total_cy_mg_eur / total_cy_rev if total_cy_rev else 0
         total_ly_mg_pct = total_ly_mg_eur / total_ly_rev if total_ly_rev else 0
 
@@ -395,7 +405,7 @@ with tab0:
         c3.metric("Margen% CY", fmt_pct(total_cy_mg_pct),
                   delta=f"{(total_cy_mg_pct-total_ly_mg_pct)*100:+.1f}pp" if total_ly_mg_pct else None)
         c4.metric("Margen EUR CY", fmt_eur(total_cy_mg_eur))
-        c5.metric("% vs Budget", fmt_pct(total_cy_rev/total_budget) if total_budget else "—")
+        c5.metric("% vs Budget To-Date", fmt_pct(total_cy_rev/total_budget) if total_budget else "—")
 
         st.divider()
         gcols = st.columns(3)
@@ -430,10 +440,10 @@ with tab1:
         for _, row in recap.iterrows():
             fig_r.add_trace(go.Bar(
                 name=row["group"],
-                x=["Revenue CY","Revenue LY","Budget"],
-                y=[row["cy_revenue"], row["ly_revenue"], row["budget_revenue"]],
+                x=["Revenue CY","Revenue LY (LfL)","Budget To-Date"],
+                y=[row["cy_revenue"], row["ly_revenue"], row["budget_to_date_revenue"]],
                 marker_color=GROUP_COLORS.get(row["group"], "#888"),
-                text=[fmt_eur(row["cy_revenue"]), fmt_eur(row["ly_revenue"]), fmt_eur(row["budget_revenue"])],
+                text=[fmt_eur(row["cy_revenue"]), fmt_eur(row["ly_revenue"]), fmt_eur(row["budget_to_date_revenue"])],
                 textposition="outside",
             ))
         fig_r.update_layout(barmode="group", title="Revenue por Grupo", height=420, yaxis_title="EUR")
@@ -453,8 +463,8 @@ with tab1:
 
         rd = recap.copy()
         for c, fn in [("cy_revenue",fmt_eur),("ly_revenue",fmt_eur),("growth_real",fmt_pct),
-                      ("cy_margin_pct",fmt_pct),("budget_revenue",fmt_eur),
-                      ("budget_achievement",fmt_pct),("stock_cy",fmt_eur)]:
+                      ("cy_margin_pct",fmt_pct),("budget_revenue",fmt_eur), ("budget_to_date_revenue",fmt_eur),
+                      ("budget_achievement",fmt_pct), ("budget_gap_eur",fmt_eur), ("budget_gap_pct",fmt_pct),("stock_cy",fmt_eur)]:
             if c in rd.columns:
                 rd[c] = rd[c].apply(fn)
         st.dataframe(rd, use_container_width=True, hide_index=True)
@@ -477,7 +487,7 @@ def vertical_tab(group_name: str):
         df, x="cy_revenue", y="cy_margin_pct",
         size=df["stock_cy"].clip(lower=0) + 1,
         color="brand",
-        hover_data=["ly_revenue","budget_revenue","days_stock"],
+        hover_data=["ly_revenue","budget_to_date_revenue","days_stock"],
         title=f"{group_name} — Revenue vs Margen%",
         labels={"cy_revenue":"Revenue CY","cy_margin_pct":"Margen% CY"},
     )
@@ -491,7 +501,7 @@ def vertical_tab(group_name: str):
             df_p, x="growth_real", y="budget_achievement",
             text="brand", color="brand",
             title="Crecimiento Real vs Consecucion Budget",
-            labels={"growth_real":"Crec. vs LY","budget_achievement":"% Budget"},
+            labels={"growth_real":"Crec. vs LY LfL","budget_achievement":"% Budget To-Date"},
         )
         fig_b.update_xaxes(tickformat=".1%")
         fig_b.update_yaxes(tickformat=".1%")

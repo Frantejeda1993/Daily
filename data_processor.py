@@ -283,16 +283,47 @@ def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly, reference_date: d
     merged['growth_real'] = np.where(
         merged['ly_revenue'] != 0,
         (merged['cy_revenue'] - merged['ly_revenue']) / merged['ly_revenue'], np.nan)
+    year_days = (date(reference_date.year, 12, 31) - date(reference_date.year, 1, 1)).days + 1
+    elapsed_days = (reference_date - date(reference_date.year, 1, 1)).days + 1
+    budget_to_date_factor = min(max(elapsed_days / year_days, 0.0), 1.0)
+    merged['budget_to_date_revenue'] = merged['budget_revenue'] * budget_to_date_factor
     merged['budget_achievement'] = np.where(
-        merged['budget_revenue'] != 0,
-        merged['cy_revenue'] / merged['budget_revenue'], np.nan)
+        merged['budget_to_date_revenue'] != 0,
+        merged['cy_revenue'] / merged['budget_to_date_revenue'], np.nan)
+    merged['budget_gap_eur'] = merged['cy_revenue'] - merged['budget_to_date_revenue']
+    merged['budget_gap_pct'] = np.where(
+        merged['budget_to_date_revenue'] != 0,
+        merged['cy_revenue'] / merged['budget_to_date_revenue'] - 1,
+        np.nan,
+    )
     merged['margin_delta_pts'] = merged['cy_margin_pct'] - merged['ly_margin_pct']
     merged['margin_delta_eur'] = merged['cy_margin_eur'] - merged['ly_margin_eur']
-    days_elapsed = max(reference_date.day, 1)
+    days_elapsed = max((reference_date - date(reference_date.year, 1, 1)).days + 1, 1)
     merged['daily_revenue_cy'] = merged['cy_revenue'] / days_elapsed
     merged['days_stock'] = np.where(
         merged['daily_revenue_cy'] > 0,
         merged['stock_cy'] / merged['daily_revenue_cy'], np.nan)
+    total_cy_revenue = merged['cy_revenue'].sum()
+    total_cy_margin_eur = merged['cy_margin_eur'].sum()
+    merged['mix_contribution_pct'] = np.where(
+        total_cy_revenue != 0,
+        merged['cy_revenue'] / total_cy_revenue,
+        np.nan,
+    )
+    merged['margin_contribution_pct'] = np.where(
+        total_cy_margin_eur != 0,
+        merged['cy_margin_eur'] / total_cy_margin_eur,
+        np.nan,
+    )
+    merged['brand_status'] = np.where(merged['ly_revenue'] > 0, 'Existing', 'New')
+
+    cy_units = cy_sales.groupby('brand', as_index=False)['unidades'].sum().rename(columns={'unidades': 'cy_units'})
+    ly_units = ly_sales.groupby('brand', as_index=False)['unidades'].sum().rename(columns={'unidades': 'ly_units'})
+    merged = merged.merge(cy_units, on='brand', how='left').merge(ly_units, on='brand', how='left')
+    merged[['cy_units', 'ly_units']] = merged[['cy_units', 'ly_units']].fillna(0)
+    merged['revenue_per_unit'] = np.where(merged['cy_units'] != 0, merged['cy_revenue'] / merged['cy_units'], np.nan)
+    merged['margin_per_unit'] = np.where(merged['cy_units'] != 0, merged['cy_margin_eur'] / merged['cy_units'], np.nan)
+    merged['metric_window'] = 'YTD_LfL'
     return merged
 
 
@@ -318,6 +349,8 @@ def build_recap(kpi_df: pd.DataFrame, family_map: dict) -> pd.DataFrame:
         cy_revenue=('cy_revenue', 'sum'), ly_revenue=('ly_revenue', 'sum'),
         cy_margin_eur=('cy_margin_eur', 'sum'), ly_margin_eur=('ly_margin_eur', 'sum'),
         budget_revenue=('budget_revenue', 'sum'),
+        budget_to_date_revenue=('budget_to_date_revenue', 'sum'),
+        budget_gap_eur=('budget_gap_eur', 'sum'),
         stock_cy=('stock_cy', 'sum'), stock_ly=('stock_ly', 'sum'),
     )
     grp['cy_margin_pct'] = np.where(
@@ -328,5 +361,10 @@ def build_recap(kpi_df: pd.DataFrame, family_map: dict) -> pd.DataFrame:
         grp['ly_revenue'] != 0,
         (grp['cy_revenue'] - grp['ly_revenue']) / grp['ly_revenue'], np.nan)
     grp['budget_achievement'] = np.where(
-        grp['budget_revenue'] != 0, grp['cy_revenue'] / grp['budget_revenue'], np.nan)
+        grp['budget_to_date_revenue'] != 0, grp['cy_revenue'] / grp['budget_to_date_revenue'], np.nan)
+    grp['budget_gap_pct'] = np.where(
+        grp['budget_to_date_revenue'] != 0,
+        grp['cy_revenue'] / grp['budget_to_date_revenue'] - 1,
+        np.nan,
+    )
     return grp
