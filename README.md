@@ -23,7 +23,8 @@ kpi_app/
 1. Sube el repositorio a GitHub (repo público o privado).
 2. Ve a [share.streamlit.io](https://share.streamlit.io) → **New app**.
 3. Selecciona el repo, rama `main` y fichero `app.py`.
-4. En **Advanced settings → Secrets** añade:
+4. (Recomendado) Añade `runtime.txt` en la raíz con `python-3.12` para evitar incompatibilidades de dependencias en Python 3.13.
+5. En **Advanced settings → Secrets** añade:
 
 ```toml
 # .streamlit/secrets.toml (o en el panel de Streamlit Cloud)
@@ -44,7 +45,7 @@ client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/..."
 universe_domain = "googleapis.com"
 ```
 
-5. Haz clic en **Deploy**.
+6. Haz clic en **Deploy**.
 
 ---
 
