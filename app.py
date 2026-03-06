@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import pickle
+from io import StringIO
 from datetime import date, datetime
 
 import numpy as np
@@ -133,7 +134,7 @@ def _deserialize_state(serialized):
             if isinstance(df_payload, str):
                 # Standard format produced by _serialize_state.
                 try:
-                    return pd.read_json(df_payload, orient="split")
+                    return pd.read_json(StringIO(df_payload), orient="split")
                 except Exception:
                     pass
 
@@ -157,7 +158,7 @@ def _deserialize_state(serialized):
 
                 # Some payloads were stored as UTF-8 encoded JSON bytes.
                 try:
-                    return pd.read_json(trimmed_bytes.decode("utf-8"), orient="split")
+                    return pd.read_json(StringIO(trimmed_bytes.decode("utf-8")), orient="split")
                 except Exception:
                     pass
 
