@@ -29,6 +29,34 @@ def _has_adc_credentials() -> bool:
         or os.environ.get("GOOGLE_CLOUD_PROJECT")
     )
 
+def _normalize_private_key(value: str) -> str:
+    """Normalize private key formatting from secrets/env into PEM-compatible text."""
+    if not isinstance(value, str):
+        return ""
+    key = value.strip()
+    if "\\n" in key:
+        key = key.replace("\\n", "\n")
+    return key
+
+
+def _extract_service_account_from_mapping(mapping) -> dict | None:
+    """Extract service account dict from multiple accepted secret layouts."""
+    if not mapping:
+        return None
+
+    # Layout A (recommended): [firebase.service_account]
+    service_account_block = mapping.get("service_account") if hasattr(mapping, 'get') else None
+    if service_account_block:
+        return dict(service_account_block)
+
+    # Layout B: service-account keys directly under [firebase]
+    required_hints = {"project_id", "client_email", "private_key"}
+    if hasattr(mapping, 'keys') and required_hints.issubset(set(mapping.keys())):
+        return dict(mapping)
+
+    return None
+
+
 
 # ─────────────────────────────────────────────
 # BASIC AUTH
@@ -122,20 +150,35 @@ def login_page():
 
 def _get_firebase_service_account_info() -> dict | None:
     """Read Firebase service account from Streamlit secrets or env JSON."""
+    info = None
+
     try:
-        if "firebase" in st.secrets and "service_account" in st.secrets["firebase"]:
-            return dict(st.secrets["firebase"]["service_account"])
+        if "firebase" in st.secrets:
+            info = _extract_service_account_from_mapping(st.secrets["firebase"])
     except Exception as exc:
         logger.warning("Unable to read firebase secrets: %s", exc)
 
-    raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
-    if raw:
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.error("Invalid FIREBASE_SERVICE_ACCOUNT_JSON: %s", exc)
-            return None
-    return None
+    if not info:
+        raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
+        if raw:
+            try:
+                info = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                logger.error("Invalid FIREBASE_SERVICE_ACCOUNT_JSON: %s", exc)
+                return None
+
+    if not info:
+        return None
+
+    info = dict(info)
+    info["private_key"] = _normalize_private_key(info.get("private_key", ""))
+
+    missing = [k for k in ("project_id", "client_email", "private_key") if not info.get(k)]
+    if missing:
+        logger.error("Firebase service account is missing required field(s): %s", ", ".join(missing))
+        return None
+
+    return info
 
 
 def _firestore_module():
