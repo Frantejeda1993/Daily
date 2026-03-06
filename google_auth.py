@@ -5,16 +5,22 @@ Handles:
   - Firebase Firestore upload / download helpers
   - Google Cloud Storage upload / download helpers (legacy fallback)
 """
+import hmac
 import importlib
 import json
+import logging
 import os
+import time
 
 import streamlit as st
 from google.cloud import storage
 from google.oauth2 import service_account
 
 
+logger = logging.getLogger(__name__)
 FIRESTORE_CHUNK_SIZE = 900_000
+MAX_LOGIN_ATTEMPTS = 5
+
 
 # ─────────────────────────────────────────────
 # BASIC AUTH
@@ -29,12 +35,34 @@ def _get_app_password() -> str:
     return password.strip() if isinstance(password, str) else ""
 
 
+def _get_dev_password() -> str:
+    """Return explicit development password fallback only in APP_ENV=dev."""
+    if os.environ.get("APP_ENV", "").lower() != "dev":
+        return ""
+    return os.environ.get("APP_DEV_PASSWORD", "").strip()
+
+
 def check_credentials(password: str) -> bool:
-    app_password = _get_app_password()
+    app_password = _get_app_password() or _get_dev_password()
     if not app_password:
-        # Default dev credential for local testing only
-        return password == "admin123"
-    return password == app_password
+        return False
+    return hmac.compare_digest(password or "", app_password)
+
+
+def _can_attempt_login() -> tuple[bool, float]:
+    now = time.time()
+    lock_until = st.session_state.get("auth_lock_until", 0.0)
+    if now < lock_until:
+        return False, lock_until - now
+    return True, 0.0
+
+
+def _register_login_failure() -> None:
+    failed_attempts = int(st.session_state.get("auth_failed_attempts", 0)) + 1
+    st.session_state["auth_failed_attempts"] = failed_attempts
+    if failed_attempts >= MAX_LOGIN_ATTEMPTS:
+        delay = min(2 ** (failed_attempts - MAX_LOGIN_ATTEMPTS), 60)
+        st.session_state["auth_lock_until"] = time.time() + delay
 
 
 def login_page():
@@ -57,12 +85,22 @@ def login_page():
         st.title("🔐 KPI Dashboard")
         st.subheader("Iniciar sesión")
         password = st.text_input("Contraseña general", type="password", key="login_pw")
-        if st.button("Entrar", use_container_width=True):
-            if check_credentials(password):
+        can_try, remaining = _can_attempt_login()
+
+        if not _get_app_password() and not _get_dev_password():
+            st.error("No hay contraseña configurada. Define APP_PASSWORD para habilitar acceso.")
+
+        if st.button("Entrar", use_container_width=True, disabled=not can_try):
+            if not can_try:
+                st.error(f"Demasiados intentos. Espera {remaining:.0f}s e inténtalo de nuevo.")
+            elif check_credentials(password):
                 st.session_state["authenticated"] = True
                 st.session_state["username"] = "app_user"
+                st.session_state["auth_failed_attempts"] = 0
+                st.session_state["auth_lock_until"] = 0.0
                 st.rerun()
             else:
+                _register_login_failure()
                 st.error("Credenciales incorrectas.")
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -77,17 +115,17 @@ def login_page():
 def _get_firebase_service_account_info() -> dict | None:
     """Read Firebase service account from Streamlit secrets or env JSON."""
     try:
-        # Expected Streamlit Cloud format: [firebase.service_account]
         if "firebase" in st.secrets and "service_account" in st.secrets["firebase"]:
             return dict(st.secrets["firebase"]["service_account"])
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Unable to read firebase secrets: %s", exc)
 
     raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON", "")
     if raw:
         try:
             return json.loads(raw)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            logger.error("Invalid FIREBASE_SERVICE_ACCOUNT_JSON: %s", exc)
             return None
     return None
 
@@ -107,6 +145,7 @@ def _get_firestore_client():
             return firestore.Client(project=project_id, credentials=credentials)
         return firestore.Client()
     except Exception as e:
+        logger.exception("Firestore client initialization failed")
         st.warning(f"Firestore no configurado: {e}")
         return None
 
@@ -120,7 +159,6 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
         firestore = _firestore_module()
         doc_ref = client.collection(collection).document(key)
 
-        # Keep single-doc writes for small payloads (legacy-compatible format).
         if len(payload) <= FIRESTORE_CHUNK_SIZE:
             doc_ref.set({"payload": payload, "updated_at": firestore.SERVER_TIMESTAMP})
             return True
@@ -130,7 +168,6 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
             for i in range(0, len(payload), FIRESTORE_CHUNK_SIZE)
         ]
 
-        # Root doc stores metadata only; payload bytes are saved in chunk subcollection.
         doc_ref.set({
             "chunked": True,
             "chunk_count": len(chunks),
@@ -144,6 +181,7 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
         batch.commit()
         return True
     except Exception as e:
+        logger.exception("Firestore upload failed for key=%s", key)
         st.error(f"Error guardando en Firestore: {e}")
         return False
 
@@ -162,7 +200,7 @@ def firestore_download_pickle(collection: str, key: str) -> bytes | None:
         if data.get("chunked"):
             chunk_count = int(data.get("chunk_count", 0) or 0)
             if chunk_count <= 0:
-                return None
+                raise ValueError(f"Invalid chunk_count for document '{key}'")
             chunk_docs = (
                 client.collection(collection)
                 .document(key)
@@ -174,11 +212,15 @@ def firestore_download_pickle(collection: str, key: str) -> bytes | None:
                 for d in chunk_docs
             }
             ordered = [chunks.get(f"{i:05d}", b"") for i in range(chunk_count)]
-            return b"".join(ordered) if all(ordered) else None
+            if not all(ordered):
+                raise ValueError(f"Missing Firestore chunk(s) for key '{key}'")
+            return b"".join(ordered)
 
         payload = data.get("payload")
         return bytes(payload) if payload else None
-    except Exception:
+    except Exception as exc:
+        logger.exception("Firestore download failed for key=%s", key)
+        st.error(f"Error cargando estado '{key}' desde Firestore: {exc}")
         return None
 
 
@@ -190,18 +232,15 @@ def firestore_download_pickle(collection: str, key: str) -> bytes | None:
 def _get_gcs_client():
     """Return a GCS client, or None if not configured."""
     try:
-        # If running on Cloud Run, ADC is used automatically.
-        # Locally, set GOOGLE_APPLICATION_CREDENTIALS env var.
         creds_json = os.environ.get("GCS_CREDENTIALS_JSON", "")
         if creds_json:
-            import tempfile
-
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".json", mode="w")
-            tmp.write(creds_json)
-            tmp.close()
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = tmp.name
+            info = json.loads(creds_json)
+            credentials = service_account.Credentials.from_service_account_info(info)
+            project = info.get("project_id")
+            return storage.Client(project=project, credentials=credentials)
         return storage.Client()
     except Exception as e:
+        logger.exception("GCS client initialization failed")
         st.warning(f"GCS no configurado: {e}")
         return None
 
@@ -217,6 +256,7 @@ def gcs_upload(bucket_name: str, destination_blob: str, data: bytes):
         blob.upload_from_string(data)
         return True
     except Exception as e:
+        logger.exception("GCS upload failed for blob=%s", destination_blob)
         st.error(f"Error subiendo a GCS: {e}")
         return False
 
@@ -230,7 +270,9 @@ def gcs_download(bucket_name: str, blob_name: str) -> bytes | None:
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_name)
         return blob.download_as_bytes()
-    except Exception:
+    except Exception as exc:
+        logger.exception("GCS download failed for blob=%s", blob_name)
+        st.error(f"Error descargando de GCS ({blob_name}): {exc}")
         return None
 
 
@@ -241,5 +283,7 @@ def gcs_list(bucket_name: str, prefix: str = "") -> list[str]:
         return []
     try:
         return [b.name for b in client.list_blobs(bucket_name, prefix=prefix)]
-    except Exception:
+    except Exception as exc:
+        logger.exception("GCS list failed for bucket=%s prefix=%s", bucket_name, prefix)
+        st.error(f"Error listando GCS: {exc}")
         return []

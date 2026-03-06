@@ -73,8 +73,7 @@ gcloud run deploy kpi-dashboard \
   --image $IMAGE \
   --platform managed \
   --region $REGION \
-  --allow-unauthenticated \
-  --service-account $SA_EMAIL \
+    --service-account $SA_EMAIL \
   --set-env-vars APP_PASSWORD="tu-contraseña-general" \
   --set-env-vars FIREBASE_SERVICE_ACCOUNT_JSON="{...json_service_account...}" \
   --set-env-vars FIRESTORE_COLLECTION="kpi_state" \
@@ -85,7 +84,7 @@ gcloud run deploy kpi-dashboard \
   --max-instances 3
 ```
 
-> **Nota:** Si no quieres exponer la app públicamente, elimina `--allow-unauthenticated` y usa Cloud IAP o VPC connector.
+> **Nota:** Se recomienda desplegar autenticado por defecto (Cloud Run IAM/IAP), con rate-limits/WAF y red privada cuando aplique.
 
 ---
 
@@ -96,7 +95,7 @@ La app usa **una contraseña general** definida en `APP_PASSWORD` (secrets o var
 - En Streamlit Cloud: define `APP_PASSWORD` en secrets.
 - En otros entornos: exporta `APP_PASSWORD` como variable de entorno.
 
-> Si `APP_PASSWORD` no está configurada, en desarrollo local se permite `admin123` como fallback.
+> Si `APP_PASSWORD` no está configurada, la app bloquea el acceso. Solo en `APP_ENV=dev` se puede usar `APP_DEV_PASSWORD` explícita para desarrollo local.
 
 ---
 
@@ -149,4 +148,4 @@ streamlit run app.py
 ```
 
 Accede en `http://localhost:8501`  
-Contraseña de desarrollo por defecto (si no defines `APP_PASSWORD`): `admin123` *(cambiar en producción)*
+Define `APP_PASSWORD` antes de arrancar. Para desarrollo local puedes usar `APP_ENV=dev` junto a `APP_DEV_PASSWORD`.

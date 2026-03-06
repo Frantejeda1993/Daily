@@ -1,8 +1,9 @@
 """
 app.py — KPI Dashboard
 """
+import hashlib
+import json
 import os
-import pickle
 from datetime import date, datetime
 
 import numpy as np
@@ -105,27 +106,68 @@ FIRESTORE_COLLECTION = os.environ.get("FIRESTORE_COLLECTION", "kpi_state")
 # PERSISTENCE (Firestore first, GCS fallback)
 # ─────────────────────────────────────────────
 
+def _serialize_state(key, obj):
+    if obj is None:
+        return None
+    if isinstance(obj, pd.DataFrame):
+        return {"type": "dataframe", "value": obj.to_json(orient="split", date_format="iso")}
+    if key in {"stock_cy", "stock_ly"}:
+        return {
+            "type": "stock_dict",
+            "value": {str(month): df.to_json(orient="split", date_format="iso") for month, df in obj.items()},
+        }
+    if isinstance(obj, date):
+        return {"type": "date", "value": obj.isoformat()}
+    if isinstance(obj, (dict, list, str, int, float, bool)):
+        return {"type": "json", "value": obj}
+    raise TypeError(f"Tipo no soportado para persistencia segura: {type(obj)}")
+
+
+def _deserialize_state(serialized):
+    if not serialized:
+        return None
+    typ = serialized.get("type")
+    value = serialized.get("value")
+    if typ == "dataframe":
+        return pd.read_json(value, orient="split")
+    if typ == "stock_dict":
+        return {int(month): pd.read_json(df_json, orient="split") for month, df_json in value.items()}
+    if typ == "date":
+        return date.fromisoformat(value)
+    if typ == "json":
+        return value
+    return None
+
+
 def _save_state(key, obj):
-    payload = pickle.dumps(obj)
+    serialized = _serialize_state(key, obj)
+    if serialized is None:
+        return
+    payload = json.dumps(serialized, ensure_ascii=False).encode("utf-8")
     if firestore_upload_pickle(FIRESTORE_COLLECTION, key, payload):
         return
     if GCS_BUCKET:
-        gcs_upload(GCS_BUCKET, GCS_PREFIX + key + ".pkl", payload)
+        gcs_upload(GCS_BUCKET, GCS_PREFIX + key + ".json", payload)
+
 
 def _load_state(key):
     raw = firestore_download_pickle(FIRESTORE_COLLECTION, key)
     if raw:
-        return pickle.loads(raw)
+        return _deserialize_state(json.loads(raw.decode("utf-8")))
     if not GCS_BUCKET:
         return None
-    raw = gcs_download(GCS_BUCKET, GCS_PREFIX + key + ".pkl")
-    return pickle.loads(raw) if raw else None
+    raw = gcs_download(GCS_BUCKET, GCS_PREFIX + key + ".json")
+    return _deserialize_state(json.loads(raw.decode("utf-8"))) if raw else None
+
 
 def load_persisted_state():
-    for k in ["cy_sales","ly_sales","stock_cy","stock_ly","budget","family_map","last_update"]:
+    for k in ["cy_sales", "ly_sales", "stock_cy", "stock_ly", "budget", "family_map", "last_update"]:
         val = _load_state(k)
         if val is not None:
             st.session_state[k] = val
+    if st.session_state.get("cy_sales") is not None and st.session_state.get("ly_sales") is not None:
+        rebuild_kpis()
+
 
 if st.session_state.get("cy_sales") is None:
     with st.spinner("Cargando datos guardados..."):
@@ -164,7 +206,7 @@ def rebuild_kpis():
 
     cy_lfl = lfl_filter(cy, ref)
     ly_lfl = lfl_filter(ly, ref)
-    kpi = merge_kpis(cy_lfl, ly_lfl, bgt, stk_cy, stk_ly)
+    kpi = merge_kpis(cy_lfl, ly_lfl, bgt, stk_cy, stk_ly, ref)
 
     fm = st.session_state["family_map"]
     kpi["group"] = kpi["brand"].map(fm).fillna("Other")
@@ -281,7 +323,8 @@ def stock_uploader_grid(state_key: str, label_prefix: str):
                 )
                 if uploaded is not None:
                     # FIX #2: unique file ID = key + name + size
-                    file_id = f"{state_key}_m{m}_{uploaded.name}_{uploaded.size}"
+                    file_hash = hashlib.sha256(uploaded.getvalue()).hexdigest()
+                    file_id = f"{state_key}_m{m}_{file_hash}"
                     if file_id not in processed:
                         try:
                             df_stk = parse_stock(uploaded)
