@@ -133,7 +133,7 @@ def _deserialize_state(serialized):
             # Standard format produced by _serialize_state.
             try:
                 return pd.read_json(df_payload, orient="split")
-            except ValueError:
+            except (UnicodeDecodeError, ValueError):
                 pass
 
             # Legacy format: binary payload accidentally persisted as text.
