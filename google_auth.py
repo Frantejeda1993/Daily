@@ -18,8 +18,8 @@ from google.oauth2 import service_account
 
 
 logger = logging.getLogger(__name__)
-FIRESTORE_CHUNK_SIZE = 900_000
-FIRESTORE_BATCH_MAX_BYTES = 8_000_000
+FIRESTORE_CHUNK_SIZE = 700_000
+FIRESTORE_BATCH_MAX_BYTES = 4_000_000
 FIRESTORE_BATCH_MAX_WRITES = 450
 MAX_LOGIN_ATTEMPTS = 5
 
@@ -240,14 +240,13 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
             doc_ref.set({"payload": payload, "updated_at": firestore.SERVER_TIMESTAMP})
             return True
 
-        chunks = [
-            payload[i:i + FIRESTORE_CHUNK_SIZE]
-            for i in range(0, len(payload), FIRESTORE_CHUNK_SIZE)
-        ]
+        chunks = [payload[i:i + FIRESTORE_CHUNK_SIZE] for i in range(0, len(payload), FIRESTORE_CHUNK_SIZE)]
 
+        # Mark as uploading to avoid readers consuming a half-written payload.
         doc_ref.set({
             "chunked": True,
             "chunk_count": len(chunks),
+            "upload_complete": False,
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
 
@@ -273,6 +272,14 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
 
         if batch_writes:
             batch.commit()
+
+        # Finalize only after all chunk writes have succeeded.
+        doc_ref.set({
+            "chunked": True,
+            "chunk_count": len(chunks),
+            "upload_complete": True,
+            "updated_at": firestore.SERVER_TIMESTAMP,
+        }, merge=True)
         return True
     except Exception as e:
         logger.exception("Firestore upload failed for key=%s", key)
@@ -292,6 +299,8 @@ def firestore_download_pickle(collection: str, key: str) -> bytes | None:
         data = doc.to_dict() or {}
 
         if data.get("chunked"):
+            if data.get("upload_complete") is False:
+                return None
             chunk_count = int(data.get("chunk_count", 0) or 0)
             if chunk_count <= 0:
                 raise ValueError(f"Invalid chunk_count for document '{key}'")
