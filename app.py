@@ -133,7 +133,7 @@ def _deserialize_state(serialized):
             # Standard format produced by _serialize_state.
             try:
                 return pd.read_json(df_payload, orient="split")
-            except (UnicodeDecodeError, ValueError):
+            except Exception:
                 pass
 
             # Legacy format: binary payload accidentally persisted as text.
@@ -144,19 +144,27 @@ def _deserialize_state(serialized):
 
         if isinstance(df_payload, (bytes, bytearray, memoryview)):
             raw_bytes = bytes(df_payload)
+            trimmed_bytes = raw_bytes.lstrip()
 
             # Legacy pickled DataFrame payload.
-            if raw_bytes.startswith(b"\x80"):
+            if trimmed_bytes.startswith(b"\x80"):
                 try:
-                    unpickled = pickle.loads(raw_bytes)
+                    unpickled = pickle.loads(trimmed_bytes)
                     return unpickled if isinstance(unpickled, pd.DataFrame) else None
                 except Exception:
                     return None
 
             # Some payloads were stored as UTF-8 encoded JSON bytes.
             try:
-                return pd.read_json(raw_bytes.decode("utf-8"), orient="split")
-            except (UnicodeDecodeError, ValueError):
+                return pd.read_json(trimmed_bytes.decode("utf-8"), orient="split")
+            except Exception:
+                pass
+
+            # Last fallback: attempt pickle load even without protocol marker.
+            try:
+                unpickled = pickle.loads(trimmed_bytes)
+                return unpickled if isinstance(unpickled, pd.DataFrame) else None
+            except Exception:
                 return None
 
         return None
@@ -268,13 +276,13 @@ def _load_state(key):
         # Preferred format: UTF-8 JSON payload written by _save_state.
         try:
             return json.loads(raw_payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except Exception:
             pass
 
         # Compatibility: some wrappers decode bytes as latin-1 text.
         try:
             return json.loads(raw_payload.decode("latin1"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except Exception:
             pass
 
         # Legacy compatibility: previously persisted pickled payloads.
