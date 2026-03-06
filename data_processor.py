@@ -132,24 +132,51 @@ def parse_budget(file) -> pd.DataFrame:
             df = pd.read_csv(file)
 
     df.columns = df.columns.str.strip()
-    df = df.rename(columns={
-        'Marca': 'brand',
-        'Budget Venta': 'budget_revenue',
-        'Margen%': 'budget_margin_pct',
-    }, errors='ignore')
+
+    normalized_cols = {
+        c: re.sub(r'\s+', ' ', str(c)).strip().lower().replace('á', 'a').replace('é', 'e')
+        .replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
+        for c in df.columns
+    }
+    rename_map = {}
+    for original, norm in normalized_cols.items():
+        if norm in {'marca', 'brand', 'clave 1', 'clave1', 'familia'}:
+            rename_map[original] = 'brand'
+        elif norm in {'budget venta', 'budget', 'budget revenue', 'presupuesto venta'}:
+            rename_map[original] = 'budget_revenue'
+        elif norm in {'margen%', 'margen %', 'budget margen%', 'budget margen %', 'margin%'}:
+            rename_map[original] = 'budget_margin_pct'
+
+    df = df.rename(columns=rename_map, errors='ignore')
 
     if 'brand' not in df.columns:
         raise ValueError("Budget file missing required column: Marca/brand")
 
     _validate_required_columns(df, {'brand', 'budget_revenue', 'budget_margin_pct'}, 'Budget file')
 
-    for col in ['budget_revenue', 'budget_margin_pct']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        else:
-            df[col] = 0.0
+    # Budget files are usually exported in European numeric format (e.g. 1.234.567,89)
+    # and sometimes with % symbols in margin.
+    if 'budget_revenue' in df.columns:
+        df['budget_revenue'] = _parse_european_numeric(df['budget_revenue']).fillna(0)
+    else:
+        df['budget_revenue'] = 0.0
 
-    df['brand'] = df['brand'].astype(str).str.strip().str.upper()
+    if 'budget_margin_pct' in df.columns:
+        margin_raw = df['budget_margin_pct'].astype(str).str.replace('%', '', regex=False)
+        df['budget_margin_pct'] = _parse_european_numeric(margin_raw).fillna(0)
+    else:
+        df['budget_margin_pct'] = 0.0
+
+    df['brand'] = df['brand'].astype(str).apply(extract_short_name)
+    df['brand'] = df['brand'].str.replace(r'\s+', ' ', regex=True).str.strip().str.upper()
+    df = df[df['brand'].ne('') & ~df['brand'].isin({'NAN', 'NONE'})]
+
+    # If duplicates exist (e.g. mixed brand labels in source file), aggregate by brand.
+    df = df.groupby('brand', as_index=False).agg(
+        budget_revenue=('budget_revenue', 'sum'),
+        budget_margin_pct=('budget_margin_pct', 'mean'),
+    )
+
     return df[['brand', 'budget_revenue', 'budget_margin_pct']].dropna(subset=['brand'])
 
 
