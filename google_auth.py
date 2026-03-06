@@ -19,6 +19,8 @@ from google.oauth2 import service_account
 
 logger = logging.getLogger(__name__)
 FIRESTORE_CHUNK_SIZE = 900_000
+FIRESTORE_BATCH_MAX_BYTES = 3_000_000
+FIRESTORE_BATCH_MAX_WRITES = 200
 MAX_LOGIN_ATTEMPTS = 5
 
 
@@ -249,11 +251,46 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
 
-        batch = client.batch()
+        def _commit_chunk_batch(chunk_batch):
+            if not chunk_batch:
+                return
+            batch = client.batch()
+            for chunk_ref, chunk_payload in chunk_batch:
+                batch.set(chunk_ref, {"payload": chunk_payload})
+            try:
+                batch.commit()
+            except Exception as batch_exc:
+                err_msg = str(batch_exc).lower()
+                if "request payload size exceeds the limit" not in err_msg:
+                    raise
+                logger.warning(
+                    "Firestore batch commit exceeded payload limit for key=%s; falling back to single writes",
+                    key,
+                )
+                for chunk_ref, chunk_payload in chunk_batch:
+                    chunk_ref.set({"payload": chunk_payload})
+
+        pending_chunks = []
+        batch_bytes = 0
+        batch_writes = 0
         for idx, chunk in enumerate(chunks):
             chunk_ref = doc_ref.collection("chunks").document(f"{idx:05d}")
-            batch.set(chunk_ref, {"payload": chunk})
-        batch.commit()
+            chunk_size = len(chunk)
+
+            if (
+                batch_writes >= FIRESTORE_BATCH_MAX_WRITES
+                or (batch_writes > 0 and batch_bytes + chunk_size > FIRESTORE_BATCH_MAX_BYTES)
+            ):
+                _commit_chunk_batch(pending_chunks)
+                pending_chunks = []
+                batch_bytes = 0
+                batch_writes = 0
+
+            pending_chunks.append((chunk_ref, chunk))
+            batch_writes += 1
+            batch_bytes += chunk_size
+
+        _commit_chunk_batch(pending_chunks)
         return True
     except Exception as e:
         logger.exception("Firestore upload failed for key=%s", key)
