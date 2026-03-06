@@ -266,6 +266,8 @@ def parse_families(file) -> pd.DataFrame:
 
 def lfl_filter(df: pd.DataFrame, reference_date: date) -> pd.DataFrame:
     fecha = df['fecha']
+    if not pd.api.types.is_datetime64_any_dtype(fecha):
+        fecha = pd.to_datetime(fecha, dayfirst=True, errors='coerce')
     mask = (fecha.dt.month < reference_date.month) | (
         (fecha.dt.month == reference_date.month) & (fecha.dt.day <= reference_date.day)
     )
