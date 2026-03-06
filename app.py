@@ -327,12 +327,21 @@ def load_persisted_state():
         if val is not None:
             st.session_state[k] = val
     if st.session_state.get("cy_sales") is not None and st.session_state.get("ly_sales") is not None:
-        rebuild_kpis()
+        try:
+            rebuild_kpis()
+        except Exception:
+            # Never fail app bootstrap due to corrupted persisted state.
+            st.session_state["kpi_table"] = None
+            st.session_state["recap_table"] = None
 
 
 if st.session_state.get("cy_sales") is None:
     with st.spinner("Cargando datos guardados..."):
-        load_persisted_state()
+        try:
+            load_persisted_state()
+        except Exception:
+            # Prevent startup crash if any persisted blob is malformed.
+            pass
 
 # ─────────────────────────────────────────────
 # STOCK HELPERS
