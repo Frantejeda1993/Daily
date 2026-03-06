@@ -52,6 +52,9 @@ client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/..."
 universe_domain = "googleapis.com"
 ```
 
+
+> **Importante:** `private_key` debe conservar saltos de línea válidos (ya sea con `\n` escapados o multilínea con `"""..."""`). La app normaliza ambos formatos automáticamente.
+> También se admite el bloque recomendado `[firebase.service_account]` o, alternativamente, las claves del service account directamente dentro de `[firebase]`.
 7. Haz clic en **Deploy**.
 
 ---
