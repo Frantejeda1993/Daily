@@ -22,6 +22,14 @@ FIRESTORE_CHUNK_SIZE = 900_000
 MAX_LOGIN_ATTEMPTS = 5
 
 
+def _has_adc_credentials() -> bool:
+    """Return True when ADC env vars are explicitly configured."""
+    return bool(
+        os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    )
+
+
 # ─────────────────────────────────────────────
 # BASIC AUTH
 # ─────────────────────────────────────────────
@@ -143,6 +151,9 @@ def _get_firestore_client():
             credentials = service_account.Credentials.from_service_account_info(service_account_info)
             project_id = service_account_info.get("project_id")
             return firestore.Client(project=project_id, credentials=credentials)
+        if not _has_adc_credentials():
+            logger.info("Firestore disabled: no credentials configured")
+            return None
         return firestore.Client()
     except Exception as e:
         logger.exception("Firestore client initialization failed")
@@ -238,6 +249,9 @@ def _get_gcs_client():
             credentials = service_account.Credentials.from_service_account_info(info)
             project = info.get("project_id")
             return storage.Client(project=project, credentials=credentials)
+        if not _has_adc_credentials():
+            logger.info("GCS disabled: no credentials configured")
+            return None
         return storage.Client()
     except Exception as e:
         logger.exception("GCS client initialization failed")
