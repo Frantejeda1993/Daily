@@ -125,6 +125,54 @@ def _serialize_state(key, obj):
 
 
 def _deserialize_state(serialized):
+    def _decode_dataframe_payload(df_payload):
+        try:
+            if isinstance(df_payload, pd.DataFrame):
+                return df_payload
+
+            if isinstance(df_payload, str):
+                # Standard format produced by _serialize_state.
+                try:
+                    return pd.read_json(df_payload, orient="split")
+                except Exception:
+                    pass
+
+                # Legacy format: binary payload accidentally persisted as text.
+                try:
+                    df_payload = df_payload.encode("latin1")
+                except UnicodeEncodeError:
+                    return None
+
+            if isinstance(df_payload, (bytes, bytearray, memoryview)):
+                raw_bytes = bytes(df_payload)
+                trimmed_bytes = raw_bytes.lstrip()
+
+                # Legacy pickled DataFrame payload.
+                if trimmed_bytes.startswith(b"\x80"):
+                    try:
+                        unpickled = pickle.loads(trimmed_bytes)
+                        return unpickled if isinstance(unpickled, pd.DataFrame) else None
+                    except Exception:
+                        return None
+
+                # Some payloads were stored as UTF-8 encoded JSON bytes.
+                try:
+                    return pd.read_json(trimmed_bytes.decode("utf-8"), orient="split")
+                except Exception:
+                    pass
+
+                # Last fallback: attempt pickle load even without protocol marker.
+                try:
+                    unpickled = pickle.loads(trimmed_bytes)
+                    return unpickled if isinstance(unpickled, pd.DataFrame) else None
+                except Exception:
+                    return None
+
+            return None
+        except Exception:
+            return None
+
+
     if not serialized:
         return None
 
@@ -140,19 +188,16 @@ def _deserialize_state(serialized):
     typ = serialized.get("type")
     value = serialized.get("value")
     if typ == "dataframe":
-        if isinstance(value, str):
-            return pd.read_json(value, orient="split")
-        return value if isinstance(value, pd.DataFrame) else None
+        return _decode_dataframe_payload(value)
     if typ == "stock_dict":
         if not isinstance(value, dict):
             return {}
         parsed = {}
         for month, df_json in value.items():
             month_int = int(month)
-            if isinstance(df_json, pd.DataFrame):
-                parsed[month_int] = df_json
-            elif isinstance(df_json, str):
-                parsed[month_int] = pd.read_json(df_json, orient="split")
+            decoded_df = _decode_dataframe_payload(df_json)
+            if decoded_df is not None:
+                parsed[month_int] = decoded_df
         return parsed
     if typ == "date":
         if isinstance(value, date):
@@ -178,80 +223,86 @@ def _save_state(key, obj):
 
 def _load_state(key):
     def _decode_payload(raw_payload):
-        if raw_payload is None:
-            return None
-
         try:
-            if hasattr(raw_payload, "__len__") and len(raw_payload) == 0:
+            if raw_payload is None:
+                return None
+
+            try:
+                if hasattr(raw_payload, "__len__") and len(raw_payload) == 0:
+                    return None
+            except Exception:
+                # Some client wrappers can raise decoding/typing errors on len()/truthiness.
+                pass
+
+            if isinstance(raw_payload, memoryview):
+                raw_payload = raw_payload.tobytes()
+            elif isinstance(raw_payload, bytearray):
+                raw_payload = bytes(raw_payload)
+            elif isinstance(raw_payload, dict):
+                return raw_payload
+            elif isinstance(raw_payload, str):
+                try:
+                    text_payload = raw_payload.strip()
+                except Exception:
+                    text_payload = raw_payload
+
+                # Some old deployments accidentally stored binary bytes as text.
+                # Try to recover with the most common reversible encodings first.
+                # New format: JSON may be returned directly as unicode text.
+                try:
+                    return json.loads(text_payload)
+                except Exception:
+                    pass
+
+                # Firestore/GCS tools may also expose payloads as base64 text.
+                try:
+                    import base64
+                    decoded_b64 = base64.b64decode(text_payload, validate=True)
+                    if decoded_b64:
+                        raw_payload = decoded_b64
+                    else:
+                        raw_payload = text_payload.encode("latin1")
+                except Exception:
+                    try:
+                        raw_payload = text_payload.encode("latin1")
+                    except UnicodeEncodeError:
+                        raw_payload = text_payload.encode("utf-8", errors="ignore")
+
+            if not isinstance(raw_payload, bytes):
+                return None
+
+            trimmed = raw_payload.lstrip()
+
+            # Fast path for legacy pickled payloads (pickle protocol marker).
+            if trimmed.startswith(b"\x80"):
+                try:
+                    return pickle.loads(trimmed)
+                except Exception:
+                    pass
+
+            # Preferred format: UTF-8 JSON payload written by _save_state.
+            try:
+                return json.loads(trimmed.decode("utf-8"))
+            except Exception:
+                pass
+
+            # Compatibility: some wrappers decode bytes as latin-1 text.
+            try:
+                return json.loads(trimmed.decode("latin1"))
+            except Exception:
+                pass
+
+            # Legacy compatibility: previously persisted pickled payloads.
+            try:
+                return pickle.loads(trimmed)
+            except Exception:
                 return None
         except Exception:
-            # Some client wrappers can raise decoding/typing errors on len()/truthiness.
-            pass
-
-        if isinstance(raw_payload, memoryview):
-            raw_payload = raw_payload.tobytes()
-        elif isinstance(raw_payload, bytearray):
-            raw_payload = bytes(raw_payload)
-        elif isinstance(raw_payload, dict):
-            return raw_payload
-        elif isinstance(raw_payload, str):
-            try:
-                text_payload = raw_payload.strip()
-            except Exception:
-                text_payload = raw_payload
-
-            # Some old deployments accidentally stored binary bytes as text.
-            # Try to recover with the most common reversible encodings first.
-            # New format: JSON may be returned directly as unicode text.
-            try:
-                return json.loads(text_payload)
-            except Exception:
-                pass
-
-            # Firestore/GCS tools may also expose payloads as base64 text.
-            try:
-                import base64
-                decoded_b64 = base64.b64decode(text_payload, validate=True)
-                if decoded_b64:
-                    raw_payload = decoded_b64
-                else:
-                    raw_payload = text_payload.encode("latin1")
-            except Exception:
-                try:
-                    raw_payload = text_payload.encode("latin1")
-                except UnicodeEncodeError:
-                    raw_payload = text_payload.encode("utf-8", errors="ignore")
-
-        if not isinstance(raw_payload, bytes):
             return None
 
-        # Fast path for legacy pickled payloads (pickle protocol marker).
-        if raw_payload.startswith(b"\x80"):
-            try:
-                return pickle.loads(raw_payload)
-            except Exception:
-                pass
-
-        # Preferred format: UTF-8 JSON payload written by _save_state.
-        try:
-            return json.loads(raw_payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            pass
-
-        # Compatibility: some wrappers decode bytes as latin-1 text.
-        try:
-            return json.loads(raw_payload.decode("latin1"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            pass
-
-        # Legacy compatibility: previously persisted pickled payloads.
-        try:
-            return pickle.loads(raw_payload)
-        except Exception:
-            return None
 
     raw = firestore_download_pickle(FIRESTORE_COLLECTION, key)
-    if raw:
+    if raw is not None:
         try:
             decoded = _decode_payload(raw)
             return _deserialize_state(decoded)
@@ -261,7 +312,7 @@ def _load_state(key):
         return None
     raw = gcs_download(GCS_BUCKET, GCS_PREFIX + key + ".json")
     try:
-        decoded = _decode_payload(raw) if raw else None
+        decoded = _decode_payload(raw) if raw is not None else None
         return _deserialize_state(decoded)
     except Exception:
         return None
@@ -276,12 +327,21 @@ def load_persisted_state():
         if val is not None:
             st.session_state[k] = val
     if st.session_state.get("cy_sales") is not None and st.session_state.get("ly_sales") is not None:
-        rebuild_kpis()
+        try:
+            rebuild_kpis()
+        except Exception:
+            # Never fail app bootstrap due to corrupted persisted state.
+            st.session_state["kpi_table"] = None
+            st.session_state["recap_table"] = None
 
 
 if st.session_state.get("cy_sales") is None:
     with st.spinner("Cargando datos guardados..."):
-        load_persisted_state()
+        try:
+            load_persisted_state()
+        except Exception:
+            # Prevent startup crash if any persisted blob is malformed.
+            pass
 
 # ─────────────────────────────────────────────
 # STOCK HELPERS
