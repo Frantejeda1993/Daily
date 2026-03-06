@@ -161,7 +161,23 @@ def _load_state(key):
         elif isinstance(raw_payload, bytearray):
             raw_payload = bytes(raw_payload)
         elif isinstance(raw_payload, str):
-            raw_payload = raw_payload.encode("utf-8", errors="ignore")
+            text_payload = raw_payload.strip()
+
+            # Some old deployments accidentally stored binary bytes as text.
+            # Try to recover with the most common reversible encodings first.
+            try:
+                raw_payload = text_payload.encode("latin1")
+            except UnicodeEncodeError:
+                raw_payload = text_payload.encode("utf-8", errors="ignore")
+
+            # Firestore/GCS tools may also expose payloads as base64 text.
+            try:
+                import base64
+                decoded_b64 = base64.b64decode(text_payload, validate=True)
+                if decoded_b64:
+                    raw_payload = decoded_b64
+            except Exception:
+                pass
 
         if not isinstance(raw_payload, bytes):
             return None
@@ -187,18 +203,27 @@ def _load_state(key):
 
     raw = firestore_download_pickle(FIRESTORE_COLLECTION, key)
     if raw:
-        decoded = _decode_payload(raw)
-        return _deserialize_state(decoded)
+        try:
+            decoded = _decode_payload(raw)
+            return _deserialize_state(decoded)
+        except Exception:
+            return None
     if not GCS_BUCKET:
         return None
     raw = gcs_download(GCS_BUCKET, GCS_PREFIX + key + ".json")
-    decoded = _decode_payload(raw) if raw else None
-    return _deserialize_state(decoded)
+    try:
+        decoded = _decode_payload(raw) if raw else None
+        return _deserialize_state(decoded)
+    except Exception:
+        return None
 
 
 def load_persisted_state():
     for k in ["cy_sales", "ly_sales", "stock_cy", "stock_ly", "budget", "family_map", "last_update"]:
-        val = _load_state(k)
+        try:
+            val = _load_state(k)
+        except Exception:
+            val = None
         if val is not None:
             st.session_state[k] = val
     if st.session_state.get("cy_sales") is not None and st.session_state.get("ly_sales") is not None:
