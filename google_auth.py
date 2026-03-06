@@ -19,8 +19,9 @@ from google.oauth2 import service_account
 
 logger = logging.getLogger(__name__)
 FIRESTORE_CHUNK_SIZE = 700_000
-FIRESTORE_BATCH_MAX_BYTES = 4_000_000
-FIRESTORE_BATCH_MAX_WRITES = 450
+# Firestore Commit requests have a hard payload limit (~10 MiB). Chunk writes are
+# intentionally sent one-by-one to guarantee each request stays below that limit
+# even for large pickles.
 MAX_LOGIN_ATTEMPTS = 5
 
 
@@ -250,28 +251,11 @@ def firestore_upload_pickle(collection: str, key: str, payload: bytes) -> bool:
             "updated_at": firestore.SERVER_TIMESTAMP,
         })
 
-        batch = client.batch()
-        batch_bytes = 0
-        batch_writes = 0
         for idx, chunk in enumerate(chunks):
             chunk_ref = doc_ref.collection("chunks").document(f"{idx:05d}")
-            chunk_size = len(chunk)
-
-            if (
-                batch_writes >= FIRESTORE_BATCH_MAX_WRITES
-                or (batch_writes > 0 and batch_bytes + chunk_size > FIRESTORE_BATCH_MAX_BYTES)
-            ):
-                batch.commit()
-                batch = client.batch()
-                batch_bytes = 0
-                batch_writes = 0
-
-            batch.set(chunk_ref, {"payload": chunk})
-            batch_writes += 1
-            batch_bytes += chunk_size
-
-        if batch_writes:
-            batch.commit()
+            # Avoid batched commits here; a large batch can exceed Firestore's
+            # request-size limit and fail the entire upload.
+            chunk_ref.set({"payload": chunk})
 
         # Finalize only after all chunk writes have succeeded.
         doc_ref.set({
