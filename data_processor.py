@@ -2,9 +2,13 @@
 data_processor.py
 """
 import re
+import logging
 import pandas as pd
 import numpy as np
 from datetime import date
+
+
+logger = logging.getLogger(__name__)
 
 
 def extract_short_name(familia_str: str) -> str:
@@ -46,6 +50,17 @@ def _parse_european_numeric(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip()
     s = s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
     return pd.to_numeric(s, errors='coerce')
+
+
+def coerce_numeric_with_logging(series: pd.Series, col_name: str) -> pd.Series:
+    """Coerce to numeric and log conversion failures."""
+    before = series.notna().sum()
+    numeric = pd.to_numeric(series, errors='coerce')
+    after = numeric.notna().sum()
+    lost = before - after
+    if lost > 0:
+        logger.warning("Column %s: %s non-numeric values coerced to NaN", col_name, lost)
+    return numeric.fillna(0)
 
 
 def _normalize_column_name(name: str) -> str:
@@ -107,7 +122,7 @@ def parse_sales(file) -> pd.DataFrame:
 
     for col in ['importe', 'margen_pct_raw', 'margen_eur', 'unidades']:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            df[col] = coerce_numeric_with_logging(df[col], col)
         elif col in {'importe'}:
             raise ValueError(f"Sales file missing required numeric column: {col}")
         else:
