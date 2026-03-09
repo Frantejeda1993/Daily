@@ -5,7 +5,7 @@ import streamlit as st
 from google_auth import login_page
 from pages import config, groups, margins, recap, update
 from persistence import load_persisted_state, save_state
-from state_manager import GROUPS, GROUP_COLORS, MONTHS_ES, init_session_state, rebuild_kpis
+from state_manager import AppState, GROUPS, GROUP_COLORS, MONTHS_ES, init_session_state, rebuild_kpis
 
 st.set_page_config(
     page_title="KPI Dashboard",
@@ -42,6 +42,11 @@ if not login_page():
     st.stop()
 
 init_session_state()
+state = AppState.from_session_state(st.session_state)
+if not state.validate():
+    st.error("Invalid application state")
+    st.stop()
+
 if st.session_state.get("cy_sales") is None:
     with st.spinner("Cargando datos guardados..."):
         load_persisted_state(rebuild_kpis)
