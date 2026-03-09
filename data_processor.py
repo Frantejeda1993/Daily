@@ -378,7 +378,15 @@ def summarise_sales(df: pd.DataFrame, group_col: str = 'brand') -> pd.DataFrame:
     return agg
 
 
-def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly, reference_date: date):
+def merge_kpis(
+    cy_sales: pd.DataFrame,
+    ly_sales: pd.DataFrame,
+    budget: pd.DataFrame | None,
+    stock_cy: pd.DataFrame,
+    stock_ly: pd.DataFrame,
+    reference_date: date,
+) -> pd.DataFrame:
+    """Merge sales, budget, and stock inputs into a KPI table by brand."""
     cy = summarise_sales(cy_sales).rename(columns={
         'revenue': 'cy_revenue',
         'margin_eur': 'cy_margin_eur',

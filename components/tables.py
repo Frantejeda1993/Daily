@@ -2,7 +2,7 @@ import pandas as pd
 import streamlit as st
 
 
-def fmt_eur(v):
+def fmt_eur(v: float | int) -> str:
     return "—" if pd.isna(v) else f"€{v:,.0f}"
 
 
