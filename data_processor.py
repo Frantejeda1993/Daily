@@ -28,6 +28,11 @@ SALES_COL_MAP = {
     'Unidades Venta':                         'unidades',
 }
 
+STOCK_EXPECTED_COLUMNS = {
+    'clave': ['clave', 'clave 1', 'clave1', 'codigo', 'código'],
+    'importe': ['importe', 'importe neto', 'monto', 'valor', 'amount'],
+}
+
 
 
 
@@ -41,6 +46,28 @@ def _parse_european_numeric(series: pd.Series) -> pd.Series:
     s = series.astype(str).str.strip()
     s = s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
     return pd.to_numeric(s, errors='coerce')
+
+
+def _normalize_column_name(name: str) -> str:
+    return re.sub(r'\s+', ' ', str(name)).strip().lower().replace('á', 'a').replace('é', 'e') \
+        .replace('í', 'i').replace('ó', 'o').replace('ú', 'u')
+
+
+def _find_expected_column(df: pd.DataFrame, col_type: str) -> str | None:
+    candidates = STOCK_EXPECTED_COLUMNS.get(col_type, [])
+    normalized_candidates = [_normalize_column_name(candidate) for candidate in candidates]
+
+    columns_by_normalized_name: dict[str, str] = {
+        _normalize_column_name(column): column
+        for column in df.columns
+    }
+
+    for candidate in normalized_candidates:
+        if candidate in columns_by_normalized_name:
+            return columns_by_normalized_name[candidate]
+    return None
+
+
 def parse_sales(file) -> pd.DataFrame:
     """
     Parse sales file (Excel or CSV).
@@ -100,13 +127,8 @@ def parse_stock(file) -> pd.DataFrame:
 
     raw.columns = [str(c).strip() for c in raw.columns]
 
-    clave_col, importe_col = None, None
-    for col in raw.columns:
-        cl = col.lower()
-        if 'clave' in cl and clave_col is None:
-            clave_col = col
-        if 'importe' in cl and importe_col is None:
-            importe_col = col
+    clave_col = _find_expected_column(raw, 'clave')
+    importe_col = _find_expected_column(raw, 'importe')
 
     if clave_col is None or importe_col is None:
         raise ValueError("Stock file must contain 'Clave' and 'Importe' columns")
