@@ -11,8 +11,10 @@ def render(groups, months_es, save_state_fn, rebuild_fn):
     known_brands = set()
     for source in ["cy_sales", "ly_sales"]:
         df_src = st.session_state.get(source)
-        if df_src is not None and "brand" in df_src.columns:
-            known_brands.update(df_src["brand"].dropna().unique().tolist())
+        if isinstance(df_src, pd.DataFrame) and not df_src.empty and "brand" in df_src.columns:
+            cleaned = df_src["brand"].dropna()
+            if not cleaned.empty:
+                known_brands.update(cleaned.unique().tolist())
     noise = {"NAN", "", "SIN CLASIFICAR", "0 - SIN CLASIFICAR", "0", "NONE"}
     known_brands -= noise
     known_brands = {b for b in known_brands if isinstance(b, str) and b.strip()}
