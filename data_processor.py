@@ -7,6 +7,7 @@ import pandas as pd
 import numpy as np
 from datetime import date
 
+from app_settings import AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -414,8 +415,9 @@ def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly, reference_date: d
         merged['ly_revenue'],
         fill_value=np.nan,
     )
-    year_days = (date(reference_date.year, 12, 31) - date(reference_date.year, 1, 1)).days + 1
-    elapsed_days = (reference_date - date(reference_date.year, 1, 1)).days + 1
+    year_start = AppConfig.get_year_start(reference_date.year)
+    year_days = AppConfig.get_days_in_year(reference_date.year)
+    elapsed_days = (reference_date - year_start).days + 1
     budget_to_date_factor = min(max(elapsed_days / year_days, 0.0), 1.0)
     merged['budget_to_date_revenue'] = merged['budget_revenue'] * budget_to_date_factor
     merged['budget_achievement'] = safe_divide(
@@ -431,7 +433,7 @@ def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly, reference_date: d
     ) - 1
     merged['margin_delta_pts'] = merged['cy_margin_pct'] - merged['ly_margin_pct']
     merged['margin_delta_eur'] = merged['cy_margin_eur'] - merged['ly_margin_eur']
-    days_elapsed = max((reference_date - date(reference_date.year, 1, 1)).days + 1, 1)
+    days_elapsed = max((reference_date - year_start).days + 1, 1)
     merged['daily_revenue_cy'] = merged['cy_revenue'] / days_elapsed
     merged['days_stock'] = safe_divide(merged['stock_cy'], merged['daily_revenue_cy'], fill_value=np.nan)
     total_cy_revenue = merged['cy_revenue'].sum()

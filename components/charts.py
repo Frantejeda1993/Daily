@@ -2,13 +2,14 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+from app_settings import AppConfig
 from components.tables import fmt_eur
 
 
 def waterfall_chart(kpi_df, group_colors, col="cy_revenue", title="Revenue por Marca"):
     if kpi_df is None or kpi_df.empty:
         return
-    df = kpi_df.sort_values(col, ascending=False).head(20)
+    df = kpi_df.sort_values(col, ascending=False).head(AppConfig.CHARTS["top_brands_count"])
     fig = px.bar(
         df,
         x="brand",

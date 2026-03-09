@@ -2,6 +2,7 @@ import hashlib
 
 import streamlit as st
 
+from app_settings import AppConfig
 from data_processor import parse_stock
 
 
@@ -10,9 +11,14 @@ def stock_uploader_grid(state_key: str, label_prefix: str, months_es, save_state
     processed = st.session_state["_processed_files"]
     changed = False
 
-    rows = [list(range(1, 5)), list(range(5, 9)), list(range(9, 13))]
+    cols_per_row = AppConfig.CHARTS["stock_grid_cols"]
+    months_in_year = AppConfig.CHARTS["months_in_year"]
+    rows = [
+        list(range(start, min(start + cols_per_row, months_in_year + 1)))
+        for start in range(1, months_in_year + 1, cols_per_row)
+    ]
     for row_months in rows:
-        cols = st.columns(4)
+        cols = st.columns(cols_per_row)
         for j, month in enumerate(row_months):
             month_name = months_es[month - 1]
             already_loaded = month in stock_dict
