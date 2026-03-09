@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -7,6 +8,48 @@ from components.charts import monthly_trend_chart
 from components.forms import stock_uploader_grid
 from components.tables import fmt_eur
 from data_processor import parse_sales
+
+
+class FileValidator:
+    MAX_SIZE_BYTES = 50 * 1024 * 1024
+    ALLOWED_TYPES = {".xlsx", ".xls", ".csv"}
+
+    @staticmethod
+    def validate_upload(uploaded_file) -> tuple[bool, str]:
+        if uploaded_file is None:
+            return False, "No se selecciono ningun archivo"
+
+        if uploaded_file.size > FileValidator.MAX_SIZE_BYTES:
+            size_mb = uploaded_file.size / 1024 / 1024
+            return False, f"Archivo demasiado grande: {size_mb:.1f}MB (max 50MB)"
+
+        ext = Path(uploaded_file.name).suffix.lower()
+        if ext not in FileValidator.ALLOWED_TYPES:
+            return False, f"Tipo de archivo no soportado: {ext}"
+
+        return True, ""
+
+
+def process_sales_file(uploaded_file):
+    is_valid, error_msg = FileValidator.validate_upload(uploaded_file)
+    if not is_valid:
+        st.error(error_msg)
+        return None
+
+    try:
+        df = parse_sales(uploaded_file)
+    except Exception as exc:
+        st.error(f"Error procesando archivo de ventas: {exc}")
+        return None
+
+    required_cols = {"fecha", "clave", "importe"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        missing_cols = ", ".join(sorted(missing))
+        st.error(f"Faltan columnas requeridas: {missing_cols}")
+        return None
+
+    return df
 
 
 def render(months_es, save_state_fn, rebuild_fn):
@@ -24,7 +67,9 @@ def render(months_es, save_state_fn, rebuild_fn):
         fid = f"cy_{cy_file.name}_{cy_file.size}"
         if fid not in st.session_state["_processed_files"]:
             with st.spinner("Procesando ventas CY..."):
-                df_cy = parse_sales(cy_file)
+                df_cy = process_sales_file(cy_file)
+                if df_cy is None:
+                    return
                 st.session_state["cy_sales"] = df_cy
                 if "fecha" in df_cy.columns:
                     max_d = df_cy["fecha"].max()
