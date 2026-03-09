@@ -149,6 +149,28 @@ def get_combined_stock(stock_dict: dict) -> pd.DataFrame:
     return combined.groupby("brand", as_index=False)["stock_value"].sum()
 
 
+@st.cache_data(show_spinner=False)
+def compute_kpi_outputs(
+    cy_sales: pd.DataFrame,
+    ly_sales: pd.DataFrame,
+    budget: Optional[pd.DataFrame],
+    stock_cy: pd.DataFrame,
+    stock_ly: pd.DataFrame,
+    reference_date: date,
+    family_map: dict,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    cy_lfl = lfl_filter(cy_sales, reference_date)
+    ly_lfl = lfl_filter(ly_sales, reference_date)
+    kpi = merge_kpis(cy_lfl, ly_lfl, budget, stock_cy, stock_ly, reference_date)
+
+    kpi["group"] = kpi["brand"].map(family_map).fillna("Other")
+
+    projection = project_month_end(cy_sales, reference_date)
+    kpi = kpi.merge(projection[["brand", "projected_revenue", "elapsed_pct"]], on="brand", how="left")
+    recap = build_recap(kpi, family_map)
+    return kpi, recap
+
+
 def rebuild_kpis():
     app_state = AppState.from_session_state(st.session_state)
     if not app_state.validate():
@@ -179,15 +201,7 @@ def rebuild_kpis():
         st.session_state["recap_table"] = None
         return
 
-    cy_lfl = lfl_filter(cy, ref)
-    ly_lfl = lfl_filter(ly, ref)
-    kpi = merge_kpis(cy_lfl, ly_lfl, bgt, stk_cy, stk_ly, ref)
-
-    family_map = app_state.family_map
-    kpi["group"] = kpi["brand"].map(family_map).fillna("Other")
-
-    projection = project_month_end(cy, ref)
-    kpi = kpi.merge(projection[["brand", "projected_revenue", "elapsed_pct"]], on="brand", how="left")
+    kpi, recap = compute_kpi_outputs(cy, ly, bgt, stk_cy, stk_ly, ref, app_state.family_map)
 
     st.session_state["kpi_table"] = kpi
-    st.session_state["recap_table"] = build_recap(kpi, family_map)
+    st.session_state["recap_table"] = recap
