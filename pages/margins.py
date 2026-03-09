@@ -2,6 +2,7 @@ import streamlit as st
 
 from components.charts import waterfall_chart
 from components.tables import fmt_delta_html, fmt_eur, fmt_pct, kpi_summary_table
+from data_processor import safe_divide
 
 
 def render(rebuild_fn, groups, group_colors):
@@ -23,8 +24,8 @@ def render(rebuild_fn, groups, group_colors):
     total_cy_mg_eur = kpi["cy_margin_eur"].sum()
     total_ly_mg_eur = kpi["ly_margin_eur"].sum()
     total_budget = kpi["budget_to_date_revenue"].sum()
-    total_cy_mg_pct = total_cy_mg_eur / total_cy_rev if total_cy_rev else 0
-    total_ly_mg_pct = total_ly_mg_eur / total_ly_rev if total_ly_rev else 0
+    total_cy_mg_pct = safe_divide(total_cy_mg_eur, total_cy_rev, fill_value=0.0)
+    total_ly_mg_pct = safe_divide(total_ly_mg_eur, total_ly_rev, fill_value=0.0)
 
     st.subheader("Totales Generales")
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -41,7 +42,7 @@ def render(rebuild_fn, groups, group_colors):
         g_rev = g["cy_revenue"].sum()
         g_ly = g["ly_revenue"].sum()
         g_mg = g["cy_margin_eur"].sum()
-        g_pct = g_mg / g_rev if g_rev else 0
+        g_pct = safe_divide(g_mg, g_rev, fill_value=0.0)
         with gcols[i]:
             st.markdown(
                 f"<div class='kpi-card' style='border-left-color:{group_colors[grp]}'>"
