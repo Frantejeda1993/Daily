@@ -342,6 +342,7 @@ def summarise_sales(df: pd.DataFrame, group_col: str = 'brand') -> pd.DataFrame:
     agg = df.groupby(group_col, as_index=False).agg(
         revenue=('importe', 'sum'),
         margin_eur=('margen_eur', 'sum'),
+        units=('unidades', 'sum'),
     )
     agg['margin_pct'] = safe_divide(agg['margin_eur'], agg['revenue'], fill_value=0.0)
     return agg
@@ -349,9 +350,17 @@ def summarise_sales(df: pd.DataFrame, group_col: str = 'brand') -> pd.DataFrame:
 
 def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly, reference_date: date):
     cy = summarise_sales(cy_sales).rename(columns={
-        'revenue': 'cy_revenue', 'margin_eur': 'cy_margin_eur', 'margin_pct': 'cy_margin_pct'})
+        'revenue': 'cy_revenue',
+        'margin_eur': 'cy_margin_eur',
+        'margin_pct': 'cy_margin_pct',
+        'units': 'cy_units',
+    })
     ly = summarise_sales(ly_sales).rename(columns={
-        'revenue': 'ly_revenue', 'margin_eur': 'ly_margin_eur', 'margin_pct': 'ly_margin_pct'})
+        'revenue': 'ly_revenue',
+        'margin_eur': 'ly_margin_eur',
+        'margin_pct': 'ly_margin_pct',
+        'units': 'ly_units',
+    })
     merged = cy.merge(ly, on='brand', how='outer').fillna(0)
 
     if budget is not None and not budget.empty:
@@ -410,9 +419,6 @@ def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly, reference_date: d
     )
     merged['brand_status'] = np.where(merged['ly_revenue'] > 0, 'Existing', 'New')
 
-    cy_units = cy_sales.groupby('brand', as_index=False)['unidades'].sum().rename(columns={'unidades': 'cy_units'})
-    ly_units = ly_sales.groupby('brand', as_index=False)['unidades'].sum().rename(columns={'unidades': 'ly_units'})
-    merged = merged.merge(cy_units, on='brand', how='left').merge(ly_units, on='brand', how='left')
     merged[['cy_units', 'ly_units']] = merged[['cy_units', 'ly_units']].fillna(0)
     merged['revenue_per_unit'] = safe_divide(merged['cy_revenue'], merged['cy_units'], fill_value=np.nan)
     merged['margin_per_unit'] = safe_divide(merged['cy_margin_eur'], merged['cy_units'], fill_value=np.nan)
