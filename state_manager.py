@@ -6,12 +6,10 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 
+from app_settings import AppConfig
 from data_processor import build_recap, lfl_filter, merge_kpis, project_month_end, validate_reference_date
 
-MONTHS_ES = [
-    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
-    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
-]
+MONTHS_ES = AppConfig.get_months()
 GROUPS = ["2 Wheels", "Free Time", "Outdoor Tech"]
 GROUP_COLORS = {
     "2 Wheels": "#4F81FF",
