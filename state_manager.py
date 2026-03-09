@@ -6,7 +6,7 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 
-from data_processor import build_recap, lfl_filter, merge_kpis, project_month_end
+from data_processor import build_recap, lfl_filter, merge_kpis, project_month_end, validate_reference_date
 
 MONTHS_ES = [
     "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
@@ -164,6 +164,17 @@ def rebuild_kpis():
     stk_ly = get_combined_stock(app_state.stock_ly)
 
     if cy is None or ly is None:
+        st.session_state["kpi_table"] = None
+        st.session_state["recap_table"] = None
+        return
+
+    data_max_ts = cy["fecha"].max() if "fecha" in cy else None
+    data_max_date = data_max_ts.date() if pd.notna(data_max_ts) else None
+
+    try:
+        validate_reference_date(ref, data_max_date)
+    except ValueError as exc:
+        st.error(str(exc))
         st.session_state["kpi_table"] = None
         st.session_state["recap_table"] = None
         return
