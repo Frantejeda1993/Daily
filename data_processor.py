@@ -299,34 +299,44 @@ def parse_families(file) -> pd.DataFrame:
             keys.add(short)
         return keys
 
-    records = []
-    for _, row in df.iterrows():
-        grupo_raw = str(row[grupo_col]).strip() if grupo_col and pd.notna(row.get(grupo_col)) else ''
-        if not grupo_raw or grupo_raw.lower() in ('nan', 'none', ''):
-            continue  # skip rows with no group assigned
+    def normalize_group_names_vectorized(frame: pd.DataFrame, col: str) -> pd.Series:
+        """Vectorized group normalization from raw text labels to app group names."""
+        normalized = (
+            frame[col]
+            .astype('string')
+            .fillna('')
+            .str.strip()
+            .str.upper()
+        )
+        result = pd.Series(pd.NA, index=frame.index, dtype='string')
+        result.loc[normalized.str.contains('2 WHEEL', regex=False, na=False)] = '2 Wheels'
+        result.loc[normalized.str.contains('FREE', regex=False, na=False)] = 'Free Time'
+        result.loc[normalized.str.contains('OUTDOOR', regex=False, na=False)] = 'Outdoor Tech'
+        return result
 
-        # Normalise group to title-case matching app GROUPS list
-        grupo_upper = grupo_raw.upper()
-        if '2 WHEEL' in grupo_upper:
-            grupo = '2 Wheels'
-        elif 'FREE' in grupo_upper:
-            grupo = 'Free Time'
-        elif 'OUTDOOR' in grupo_upper:
-            grupo = 'Outdoor Tech'
-        else:
-            continue  # unknown group, skip
+    if not grupo_col:
+        return pd.DataFrame(columns=['brand_key', 'grupo'])
 
-        # Primary key: extract_short_name from Familia column → uppercase → matches sales brand
-        if familia_col and pd.notna(row.get(familia_col)):
-            for brand_key in candidate_brand_keys(row[familia_col]):
-                records.append({'brand_key': brand_key, 'grupo': grupo})
+    group_series = normalize_group_names_vectorized(df, grupo_col)
+    valid_rows = df[group_series.notna()].copy()
+    valid_rows['grupo'] = group_series[group_series.notna()].values
 
-        # Secondary key: Nombre column (title-cased display name) → uppercase
-        if nombre_col and pd.notna(row.get(nombre_col)):
-            for brand_key in candidate_brand_keys(row[nombre_col]):
-                records.append({'brand_key': brand_key, 'grupo': grupo})
+    frames = []
+    for source_col in [familia_col, nombre_col]:
+        if not source_col:
+            continue
+        keys = valid_rows[source_col].apply(candidate_brand_keys)
+        expanded = valid_rows[['grupo']].copy()
+        expanded['brand_key'] = keys
+        expanded = expanded.explode('brand_key')
+        expanded = expanded[expanded['brand_key'].notna()]
+        if not expanded.empty:
+            frames.append(expanded[['brand_key', 'grupo']])
 
-    result = pd.DataFrame(records).drop_duplicates(subset=['brand_key'])
+    if not frames:
+        return pd.DataFrame(columns=['brand_key', 'grupo'])
+
+    result = pd.concat(frames, ignore_index=True).drop_duplicates(subset=['brand_key'])
     return result
 
 
