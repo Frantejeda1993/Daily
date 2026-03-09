@@ -1,4 +1,5 @@
 import plotly.express as px
+import pandas as pd
 import streamlit as st
 
 from components.tables import kpi_summary_table
@@ -7,8 +8,16 @@ from components.tables import kpi_summary_table
 def render_group(group_name: str):
     st.header(f"{group_name} — Detalle por Marca")
     kpi = st.session_state.get("kpi_table")
-    if kpi is None:
+    if not isinstance(kpi, pd.DataFrame) or kpi.empty:
         st.info("Sin datos disponibles.")
+        return
+
+    if "group" not in kpi.columns:
+        st.warning("No se puede filtrar por grupo porque falta la columna 'group'.")
+        return
+
+    if not isinstance(group_name, str) or not group_name.strip():
+        st.warning("Grupo invalido. Revisa la configuracion de pestañas.")
         return
 
     df = kpi[kpi["group"] == group_name].copy()
