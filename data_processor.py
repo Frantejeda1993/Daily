@@ -11,6 +11,38 @@ from datetime import date
 logger = logging.getLogger(__name__)
 
 
+def _read_tabular_with_fallbacks(
+    file,
+    dataset_name: str,
+    preferred_sheet: str,
+) -> pd.DataFrame:
+    """Read a tabular file with logged Excel/CSV fallbacks."""
+    readers = [
+        ("excel_named_sheet", lambda: pd.read_excel(file, sheet_name=preferred_sheet, header=0)),
+        ("excel_first_sheet", lambda: pd.read_excel(file, sheet_name=0, header=0)),
+        ("csv", lambda: pd.read_csv(file)),
+    ]
+    errors: list[str] = []
+
+    for method_name, reader in readers:
+        try:
+            if hasattr(file, "seek"):
+                file.seek(0)
+            return reader()
+        except Exception as exc:
+            errors.append(f"{method_name}: {exc}")
+            logger.warning(
+                "Failed to parse %s using %s fallback: %s",
+                dataset_name,
+                method_name,
+                exc,
+            )
+
+    raise ValueError(
+        f"Unable to parse {dataset_name}. Attempts: {' | '.join(errors)}"
+    )
+
+
 def validate_reference_date(reference_date: date, data_max_date: date | None) -> bool:
     """Ensure a reference date is not in the future or after available data."""
     if reference_date > date.today():
@@ -189,13 +221,7 @@ def parse_stock(file) -> pd.DataFrame:
 
 
 def parse_budget(file) -> pd.DataFrame:
-    try:
-        df = pd.read_excel(file, sheet_name='INPUT (Anual) Budget', header=0)
-    except Exception:
-        try:
-            df = pd.read_excel(file, sheet_name=0, header=0)
-        except Exception:
-            df = pd.read_csv(file)
+    df = _read_tabular_with_fallbacks(file, 'Budget file', 'INPUT (Anual) Budget')
 
     df.columns = df.columns.str.strip()
 
@@ -261,14 +287,7 @@ def parse_families(file) -> pd.DataFrame:
 
     Returns DataFrame: brand_key (uppercase) | display_name | group (title-cased)
     """
-    df = None
-    try:
-        df = pd.read_excel(file, sheet_name='INPUT (Anual) Familias', header=0)
-    except Exception:
-        try:
-            df = pd.read_excel(file, sheet_name=0, header=0)
-        except Exception:
-            df = pd.read_csv(file)
+    df = _read_tabular_with_fallbacks(file, 'Families file', 'INPUT (Anual) Familias')
 
     df.columns = df.columns.str.strip()
 

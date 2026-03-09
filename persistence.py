@@ -1,6 +1,7 @@
 import json
 import os
 import pickle
+import logging
 from datetime import date, datetime
 from io import StringIO
 
@@ -12,6 +13,8 @@ from google_auth import gcs_download, gcs_upload, firestore_download_pickle, fir
 GCS_BUCKET = os.environ.get("GCS_BUCKET", "")
 GCS_PREFIX = "kpi_data/"
 FIRESTORE_COLLECTION = os.environ.get("FIRESTORE_COLLECTION", "kpi_state")
+
+logger = logging.getLogger(__name__)
 
 
 def serialize_state(key, obj):
@@ -185,17 +188,25 @@ def load_state(key):
 
 
 def load_persisted_state(rebuild_fn):
+    load_errors = []
     for key in ["cy_sales", "ly_sales", "stock_cy", "stock_ly", "budget", "family_map", "last_update"]:
         try:
             value = load_state(key)
-        except Exception:
+        except Exception as exc:
+            logger.exception("Error loading persisted key '%s'", key)
+            load_errors.append((key, exc))
             value = None
         if value is not None:
             st.session_state[key] = value
+
+    if load_errors:
+        st.warning("No se pudieron recuperar algunos datos guardados. Revisa los logs para más detalle.")
 
     if st.session_state.get("cy_sales") is not None and st.session_state.get("ly_sales") is not None:
         try:
             rebuild_fn()
         except Exception:
+            logger.exception("Error rebuilding KPI tables after loading persisted state")
             st.session_state["kpi_table"] = None
             st.session_state["recap_table"] = None
+            st.error("Se cargaron datos guardados, pero falló el recálculo de KPIs.")
