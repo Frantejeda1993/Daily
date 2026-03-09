@@ -11,6 +11,19 @@ from datetime import date
 logger = logging.getLogger(__name__)
 
 
+def validate_reference_date(reference_date: date, data_max_date: date | None) -> bool:
+    """Ensure a reference date is not in the future or after available data."""
+    if reference_date > date.today():
+        raise ValueError(f"Reference date {reference_date} cannot be in the future")
+
+    if data_max_date is not None and reference_date > data_max_date:
+        raise ValueError(
+            f"Reference date {reference_date} is after latest data {data_max_date}"
+        )
+
+    return True
+
+
 def extract_short_name(familia_str: str) -> str:
     """'300 - FAMILIA SHOKZ' -> 'SHOKZ'  (uppercase, stripped)"""
     if not isinstance(familia_str, str):
@@ -409,12 +422,21 @@ def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly, reference_date: d
 
 def project_month_end(cy_sales_full: pd.DataFrame, reference_date: date) -> pd.DataFrame:
     import calendar
+
+    data_max_ts = cy_sales_full['fecha'].max() if 'fecha' in cy_sales_full else None
+    data_max_date = data_max_ts.date() if pd.notna(data_max_ts) else None
+    validate_reference_date(reference_date, data_max_date)
+
     days_in_month = calendar.monthrange(reference_date.year, reference_date.month)[1]
     days_elapsed = max(reference_date.day, 1)
     cy_month = cy_sales_full[
         (cy_sales_full['fecha'].dt.month == reference_date.month) &
         (cy_sales_full['fecha'].dt.year == reference_date.year)
     ]
+
+    if cy_month.empty:
+        return pd.DataFrame(columns=['brand', 'cy_revenue_todate', 'projected_revenue', 'elapsed_pct'])
+
     agg = summarise_sales(cy_month)[['brand', 'revenue']].rename(
         columns={'revenue': 'cy_revenue_todate'})
     agg['projected_revenue'] = agg['cy_revenue_todate'] * (days_in_month / days_elapsed)
