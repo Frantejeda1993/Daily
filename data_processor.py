@@ -68,6 +68,24 @@ def _find_expected_column(df: pd.DataFrame, col_type: str) -> str | None:
     return None
 
 
+def safe_divide(numerator, denominator, fill_value: float = np.nan):
+    """Divide safely for scalars or Series, returning fill_value for zero/NaN denominators."""
+    if np.isscalar(numerator) and np.isscalar(denominator):
+        if pd.isna(denominator) or denominator == 0:
+            return fill_value
+        return numerator / denominator
+
+    numerator_series = numerator if isinstance(numerator, pd.Series) else pd.Series(numerator)
+    denominator_series = denominator if isinstance(denominator, pd.Series) else pd.Series(denominator, index=numerator_series.index)
+
+    valid_denominator = denominator_series.notna() & (denominator_series != 0)
+    result = pd.Series(fill_value, index=denominator_series.index, dtype=float)
+    result.loc[valid_denominator] = (
+        numerator_series.loc[valid_denominator] / denominator_series.loc[valid_denominator]
+    )
+    return result
+
+
 def parse_sales(file) -> pd.DataFrame:
     """
     Parse sales file (Excel or CSV).
@@ -99,11 +117,9 @@ def parse_sales(file) -> pd.DataFrame:
     if df['margen_eur'].abs().sum() == 0 and df['margen_pct_raw'].abs().sum() > 0:
         df['margen_eur'] = df['importe'] * (df['margen_pct_raw'] / 100.0)
 
-    df['margen_pct'] = np.where(
-        df['importe'] != 0,
-        df['margen_eur'] / df['importe'],
-        df['margen_pct_raw'] / 100.0,
-    )
+    df['margen_pct'] = safe_divide(df['margen_eur'], df['importe'], fill_value=np.nan)
+    fallback_mask = df['margen_pct'].isna()
+    df.loc[fallback_mask, 'margen_pct'] = df.loc[fallback_mask, 'margen_pct_raw'] / 100.0
     return df
 
 
@@ -299,9 +315,7 @@ def summarise_sales(df: pd.DataFrame, group_col: str = 'brand') -> pd.DataFrame:
         revenue=('importe', 'sum'),
         margin_eur=('margen_eur', 'sum'),
     )
-    agg['margin_pct'] = np.where(
-        agg['revenue'] != 0, agg['margin_eur'] / agg['revenue'], 0.0
-    )
+    agg['margin_pct'] = safe_divide(agg['margin_eur'], agg['revenue'], fill_value=0.0)
     return agg
 
 
@@ -329,40 +343,42 @@ def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly, reference_date: d
             merged[col_name] = 0.0
     merged.fillna(0, inplace=True)
 
-    merged['growth_real'] = np.where(
-        merged['ly_revenue'] != 0,
-        (merged['cy_revenue'] - merged['ly_revenue']) / merged['ly_revenue'], np.nan)
+    merged['growth_real'] = safe_divide(
+        merged['cy_revenue'] - merged['ly_revenue'],
+        merged['ly_revenue'],
+        fill_value=np.nan,
+    )
     year_days = (date(reference_date.year, 12, 31) - date(reference_date.year, 1, 1)).days + 1
     elapsed_days = (reference_date - date(reference_date.year, 1, 1)).days + 1
     budget_to_date_factor = min(max(elapsed_days / year_days, 0.0), 1.0)
     merged['budget_to_date_revenue'] = merged['budget_revenue'] * budget_to_date_factor
-    merged['budget_achievement'] = np.where(
-        merged['budget_to_date_revenue'] != 0,
-        merged['cy_revenue'] / merged['budget_to_date_revenue'], np.nan)
-    merged['budget_gap_eur'] = merged['cy_revenue'] - merged['budget_to_date_revenue']
-    merged['budget_gap_pct'] = np.where(
-        merged['budget_to_date_revenue'] != 0,
-        merged['cy_revenue'] / merged['budget_to_date_revenue'] - 1,
-        np.nan,
+    merged['budget_achievement'] = safe_divide(
+        merged['cy_revenue'],
+        merged['budget_to_date_revenue'],
+        fill_value=np.nan,
     )
+    merged['budget_gap_eur'] = merged['cy_revenue'] - merged['budget_to_date_revenue']
+    merged['budget_gap_pct'] = safe_divide(
+        merged['cy_revenue'],
+        merged['budget_to_date_revenue'],
+        fill_value=np.nan,
+    ) - 1
     merged['margin_delta_pts'] = merged['cy_margin_pct'] - merged['ly_margin_pct']
     merged['margin_delta_eur'] = merged['cy_margin_eur'] - merged['ly_margin_eur']
     days_elapsed = max((reference_date - date(reference_date.year, 1, 1)).days + 1, 1)
     merged['daily_revenue_cy'] = merged['cy_revenue'] / days_elapsed
-    merged['days_stock'] = np.where(
-        merged['daily_revenue_cy'] > 0,
-        merged['stock_cy'] / merged['daily_revenue_cy'], np.nan)
+    merged['days_stock'] = safe_divide(merged['stock_cy'], merged['daily_revenue_cy'], fill_value=np.nan)
     total_cy_revenue = merged['cy_revenue'].sum()
     total_cy_margin_eur = merged['cy_margin_eur'].sum()
-    merged['mix_contribution_pct'] = np.where(
-        total_cy_revenue != 0,
-        merged['cy_revenue'] / total_cy_revenue,
-        np.nan,
+    merged['mix_contribution_pct'] = safe_divide(
+        merged['cy_revenue'],
+        pd.Series(total_cy_revenue, index=merged.index),
+        fill_value=np.nan,
     )
-    merged['margin_contribution_pct'] = np.where(
-        total_cy_margin_eur != 0,
-        merged['cy_margin_eur'] / total_cy_margin_eur,
-        np.nan,
+    merged['margin_contribution_pct'] = safe_divide(
+        merged['cy_margin_eur'],
+        pd.Series(total_cy_margin_eur, index=merged.index),
+        fill_value=np.nan,
     )
     merged['brand_status'] = np.where(merged['ly_revenue'] > 0, 'Existing', 'New')
 
@@ -370,8 +386,8 @@ def merge_kpis(cy_sales, ly_sales, budget, stock_cy, stock_ly, reference_date: d
     ly_units = ly_sales.groupby('brand', as_index=False)['unidades'].sum().rename(columns={'unidades': 'ly_units'})
     merged = merged.merge(cy_units, on='brand', how='left').merge(ly_units, on='brand', how='left')
     merged[['cy_units', 'ly_units']] = merged[['cy_units', 'ly_units']].fillna(0)
-    merged['revenue_per_unit'] = np.where(merged['cy_units'] != 0, merged['cy_revenue'] / merged['cy_units'], np.nan)
-    merged['margin_per_unit'] = np.where(merged['cy_units'] != 0, merged['cy_margin_eur'] / merged['cy_units'], np.nan)
+    merged['revenue_per_unit'] = safe_divide(merged['cy_revenue'], merged['cy_units'], fill_value=np.nan)
+    merged['margin_per_unit'] = safe_divide(merged['cy_margin_eur'], merged['cy_units'], fill_value=np.nan)
     merged['metric_window'] = 'YTD_LfL'
     return merged
 
@@ -402,18 +418,9 @@ def build_recap(kpi_df: pd.DataFrame, family_map: dict) -> pd.DataFrame:
         budget_gap_eur=('budget_gap_eur', 'sum'),
         stock_cy=('stock_cy', 'sum'), stock_ly=('stock_ly', 'sum'),
     )
-    grp['cy_margin_pct'] = np.where(
-        grp['cy_revenue'] != 0, grp['cy_margin_eur'] / grp['cy_revenue'], 0.0)
-    grp['ly_margin_pct'] = np.where(
-        grp['ly_revenue'] != 0, grp['ly_margin_eur'] / grp['ly_revenue'], 0.0)
-    grp['growth_real'] = np.where(
-        grp['ly_revenue'] != 0,
-        (grp['cy_revenue'] - grp['ly_revenue']) / grp['ly_revenue'], np.nan)
-    grp['budget_achievement'] = np.where(
-        grp['budget_to_date_revenue'] != 0, grp['cy_revenue'] / grp['budget_to_date_revenue'], np.nan)
-    grp['budget_gap_pct'] = np.where(
-        grp['budget_to_date_revenue'] != 0,
-        grp['cy_revenue'] / grp['budget_to_date_revenue'] - 1,
-        np.nan,
-    )
+    grp['cy_margin_pct'] = safe_divide(grp['cy_margin_eur'], grp['cy_revenue'], fill_value=0.0)
+    grp['ly_margin_pct'] = safe_divide(grp['ly_margin_eur'], grp['ly_revenue'], fill_value=0.0)
+    grp['growth_real'] = safe_divide(grp['cy_revenue'] - grp['ly_revenue'], grp['ly_revenue'], fill_value=np.nan)
+    grp['budget_achievement'] = safe_divide(grp['cy_revenue'], grp['budget_to_date_revenue'], fill_value=np.nan)
+    grp['budget_gap_pct'] = safe_divide(grp['cy_revenue'], grp['budget_to_date_revenue'], fill_value=np.nan) - 1
     return grp
