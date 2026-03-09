@@ -1,7 +1,7 @@
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 import pandas as pd
 import streamlit as st
@@ -137,7 +137,7 @@ def init_session_state():
         app_state.sync_to_session(st.session_state)
 
 
-def get_combined_stock(stock_dict: dict) -> pd.DataFrame:
+def get_combined_stock(stock_dict: Mapping[str, pd.DataFrame | None]) -> pd.DataFrame:
     if not stock_dict:
         return pd.DataFrame(columns=["brand", "stock_value"])
     frames = [df for df in stock_dict.values() if df is not None and not df.empty]
