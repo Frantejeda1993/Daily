@@ -129,6 +129,80 @@ def _find_expected_column(df: pd.DataFrame, col_type: str) -> str | None:
     return None
 
 
+def _detect_family_columns(df: pd.DataFrame) -> tuple[str | None, str | None, str | None]:
+    """Detect source columns for nombre, familia and grupo using normalized aliases."""
+    aliases = {
+        'nombre': ('nombre', 'marca', 'brand'),
+        'familia': ('familia', 'clave 1', 'clave1'),
+        'grupo': ('columna1', 'grupo', 'group', 'vertical', 'categoria'),
+    }
+    columns_by_normalized_name: dict[str, str] = {
+        _normalize_column_name(column): column
+        for column in df.columns
+    }
+
+    detected: list[str | None] = []
+    for key in ('nombre', 'familia', 'grupo'):
+        match = None
+        for alias in aliases[key]:
+            normalized_alias = _normalize_column_name(alias)
+            if normalized_alias in columns_by_normalized_name:
+                match = columns_by_normalized_name[normalized_alias]
+                break
+        detected.append(match)
+    return detected[0], detected[1], detected[2]
+
+
+def candidate_brand_keys(raw_value: str) -> set[str]:
+    """Build uppercase key variants to improve matching against detected brands."""
+    if raw_value is None:
+        return set()
+    txt = str(raw_value).strip()
+    if not txt or txt.lower() in ('nan', 'none', ''):
+        return set()
+
+    keys = set()
+    compact = re.sub(r'\s+', ' ', txt).strip().upper()
+    if compact:
+        keys.add(compact)
+
+    short = extract_short_name(txt)
+    short = re.sub(r'\s+', ' ', short).strip().upper()
+    if short:
+        keys.add(short)
+    return keys
+
+
+def normalize_group_names_vectorized(frame: pd.DataFrame, col: str) -> pd.Series:
+    """Vectorized group normalization from raw text labels to app group names."""
+    normalized = (
+        frame[col]
+        .astype('string')
+        .fillna('')
+        .str.strip()
+        .str.upper()
+    )
+    result = pd.Series(pd.NA, index=frame.index, dtype='string')
+    result.loc[normalized.str.contains('2 WHEEL', regex=False, na=False)] = '2 Wheels'
+    result.loc[normalized.str.contains('FREE', regex=False, na=False)] = 'Free Time'
+    result.loc[normalized.str.contains('OUTDOOR', regex=False, na=False)] = 'Outdoor Tech'
+    return result
+
+
+def _expand_brand_keys(
+    valid_rows: pd.DataFrame,
+    source_col: str,
+    group_col: str = 'grupo',
+) -> pd.DataFrame:
+    """Explode key variants from a source column into brand_key/group pairs."""
+    keys = valid_rows[source_col].apply(candidate_brand_keys)
+    expanded = valid_rows[[group_col]].copy()
+    expanded['brand_key'] = keys
+    expanded = expanded.explode('brand_key')
+    expanded = expanded[expanded['brand_key'].notna()]
+    return expanded[['brand_key', group_col]].rename(columns={group_col: 'grupo'})
+
+
 def safe_divide(numerator, denominator, fill_value: float = np.nan):
     """Divide safely for scalars or Series, returning fill_value for zero/NaN denominators."""
     if np.isscalar(numerator) and np.isscalar(denominator):
@@ -286,70 +360,31 @@ def parse_families(file) -> pd.DataFrame:
       - 'Columna1' contains the group: '2 WHEELS', 'FREE TIME', 'OUTDOOR TECH'
       - Also try 'Nombre' column (display name like 'Shokz') as fallback key
 
-    Returns DataFrame: brand_key (uppercase) | display_name | group (title-cased)
+    Returns DataFrame: brand_key (uppercase) | grupo
     """
     df = _read_tabular_with_fallbacks(file, 'Families file', 'INPUT (Anual) Familias')
 
     df.columns = df.columns.str.strip()
 
-    # Normalise column names flexibly
-    col_lower = {c.lower(): c for c in df.columns}
-
-    nombre_col  = col_lower.get('nombre',  col_lower.get('marca',  col_lower.get('brand', None)))
-    familia_col = col_lower.get('familia', col_lower.get('clave 1', col_lower.get('clave1', None)))
-    grupo_col   = col_lower.get('columna1', col_lower.get('grupo', col_lower.get('group',
-                   col_lower.get('vertical', col_lower.get('categoria', None)))))
-
-    def candidate_brand_keys(raw_value: str) -> set[str]:
-        """Build uppercase key variants to improve matching against detected brands."""
-        if raw_value is None:
-            return set()
-        txt = str(raw_value).strip()
-        if not txt or txt.lower() in ('nan', 'none', ''):
-            return set()
-
-        keys = set()
-        compact = re.sub(r'\s+', ' ', txt).strip().upper()
-        if compact:
-            keys.add(compact)
-
-        short = extract_short_name(txt)
-        short = re.sub(r'\s+', ' ', short).strip().upper()
-        if short:
-            keys.add(short)
-        return keys
-
-    def normalize_group_names_vectorized(frame: pd.DataFrame, col: str) -> pd.Series:
-        """Vectorized group normalization from raw text labels to app group names."""
-        normalized = (
-            frame[col]
-            .astype('string')
-            .fillna('')
-            .str.strip()
-            .str.upper()
+    nombre_col, familia_col, grupo_col = _detect_family_columns(df)
+    if not grupo_col or (not nombre_col and not familia_col):
+        raise ValueError(
+            "Families file missing required columns. "
+            f"Detected columns: nombre={nombre_col}, familia={familia_col}, grupo={grupo_col}"
         )
-        result = pd.Series(pd.NA, index=frame.index, dtype='string')
-        result.loc[normalized.str.contains('2 WHEEL', regex=False, na=False)] = '2 Wheels'
-        result.loc[normalized.str.contains('FREE', regex=False, na=False)] = 'Free Time'
-        result.loc[normalized.str.contains('OUTDOOR', regex=False, na=False)] = 'Outdoor Tech'
-        return result
-
-    if not grupo_col:
-        return pd.DataFrame(columns=['brand_key', 'grupo'])
 
     group_series = normalize_group_names_vectorized(df, grupo_col)
     valid_rows = df[group_series.notna()].copy()
     valid_rows['grupo'] = group_series[group_series.notna()].values
 
+    if valid_rows.empty:
+        return pd.DataFrame(columns=['brand_key', 'grupo'])
+
     frames = []
     for source_col in [familia_col, nombre_col]:
         if not source_col:
             continue
-        keys = valid_rows[source_col].apply(candidate_brand_keys)
-        expanded = valid_rows[['grupo']].copy()
-        expanded['brand_key'] = keys
-        expanded = expanded.explode('brand_key')
-        expanded = expanded[expanded['brand_key'].notna()]
+        expanded = _expand_brand_keys(valid_rows, source_col, group_col='grupo')
         if not expanded.empty:
             frames.append(expanded[['brand_key', 'grupo']])
 
