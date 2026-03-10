@@ -434,6 +434,25 @@ def merge_kpis(
         'margin_pct': 'ly_margin_pct',
         'units': 'ly_units',
     })
+
+    merged = _merge_base_tables(cy, ly, budget, stock_cy, stock_ly)
+    merged = _compute_growth_metrics(merged)
+    merged = _compute_budget_metrics(merged, reference_date)
+    merged = _compute_stock_metrics(merged, reference_date)
+    merged = _compute_mix_and_contribution_metrics(merged)
+    merged = _compute_unit_metrics(merged)
+    merged['metric_window'] = 'YTD_LfL'
+    return merged
+
+
+def _merge_base_tables(
+    cy: pd.DataFrame,
+    ly: pd.DataFrame,
+    budget: pd.DataFrame | None,
+    stock_cy: pd.DataFrame,
+    stock_ly: pd.DataFrame,
+) -> pd.DataFrame:
+    """Merge core CY/LY sales with optional budget and stock inputs."""
     merged = cy.merge(ly, on='brand', how='outer').fillna(0)
 
     if budget is not None and not budget.empty:
@@ -452,52 +471,76 @@ def merge_kpis(
         else:
             merged[col_name] = 0.0
     merged.fillna(0, inplace=True)
+    return merged
 
-    merged['growth_real'] = safe_divide(
-        merged['cy_revenue'] - merged['ly_revenue'],
-        merged['ly_revenue'],
+
+def _compute_growth_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute revenue/margin growth deltas between CY and LY."""
+    result = df.copy()
+    result['growth_real'] = safe_divide(
+        result['cy_revenue'] - result['ly_revenue'],
+        result['ly_revenue'],
         fill_value=np.nan,
     )
+    result['margin_delta_pts'] = result['cy_margin_pct'] - result['ly_margin_pct']
+    result['margin_delta_eur'] = result['cy_margin_eur'] - result['ly_margin_eur']
+    result['brand_status'] = np.where(result['ly_revenue'] > 0, 'Existing', 'New')
+    return result
+
+
+def _compute_budget_metrics(df: pd.DataFrame, reference_date: date) -> pd.DataFrame:
+    """Compute budget-to-date progress and gap metrics."""
+    result = df.copy()
     year_start = AppConfig.get_year_start(reference_date.year)
     year_days = AppConfig.get_days_in_year(reference_date.year)
     elapsed_days = (reference_date - year_start).days + 1
     budget_to_date_factor = min(max(elapsed_days / year_days, 0.0), 1.0)
-    merged['budget_to_date_revenue'] = merged['budget_revenue'] * budget_to_date_factor
-    merged['budget_achievement'] = safe_divide(
-        merged['cy_revenue'],
-        merged['budget_to_date_revenue'],
+    result['budget_to_date_revenue'] = result['budget_revenue'] * budget_to_date_factor
+    result['budget_achievement'] = safe_divide(
+        result['cy_revenue'],
+        result['budget_to_date_revenue'],
         fill_value=np.nan,
     )
-    merged['budget_gap_eur'] = merged['cy_revenue'] - merged['budget_to_date_revenue']
-    merged['budget_gap_pct'] = safe_divide(
-        merged['cy_revenue'],
-        merged['budget_to_date_revenue'],
-        fill_value=np.nan,
-    ) - 1
-    merged['margin_delta_pts'] = merged['cy_margin_pct'] - merged['ly_margin_pct']
-    merged['margin_delta_eur'] = merged['cy_margin_eur'] - merged['ly_margin_eur']
-    days_elapsed = max((reference_date - year_start).days + 1, 1)
-    merged['daily_revenue_cy'] = merged['cy_revenue'] / days_elapsed
-    merged['days_stock'] = safe_divide(merged['stock_cy'], merged['daily_revenue_cy'], fill_value=np.nan)
-    total_cy_revenue = merged['cy_revenue'].sum()
-    total_cy_margin_eur = merged['cy_margin_eur'].sum()
-    merged['mix_contribution_pct'] = safe_divide(
-        merged['cy_revenue'],
-        pd.Series(total_cy_revenue, index=merged.index),
-        fill_value=np.nan,
-    )
-    merged['margin_contribution_pct'] = safe_divide(
-        merged['cy_margin_eur'],
-        pd.Series(total_cy_margin_eur, index=merged.index),
-        fill_value=np.nan,
-    )
-    merged['brand_status'] = np.where(merged['ly_revenue'] > 0, 'Existing', 'New')
+    result['budget_gap_eur'] = result['cy_revenue'] - result['budget_to_date_revenue']
+    result['budget_gap_pct'] = result['budget_achievement'] - 1
+    return result
 
-    merged[['cy_units', 'ly_units']] = merged[['cy_units', 'ly_units']].fillna(0)
-    merged['revenue_per_unit'] = safe_divide(merged['cy_revenue'], merged['cy_units'], fill_value=np.nan)
-    merged['margin_per_unit'] = safe_divide(merged['cy_margin_eur'], merged['cy_units'], fill_value=np.nan)
-    merged['metric_window'] = 'YTD_LfL'
-    return merged
+
+def _compute_stock_metrics(df: pd.DataFrame, reference_date: date) -> pd.DataFrame:
+    """Compute stock pressure metrics such as days of stock."""
+    result = df.copy()
+    year_start = AppConfig.get_year_start(reference_date.year)
+    days_elapsed = max((reference_date - year_start).days + 1, 1)
+    result['daily_revenue_cy'] = safe_divide(result['cy_revenue'], days_elapsed, fill_value=np.nan)
+    result['days_stock'] = safe_divide(result['stock_cy'], result['daily_revenue_cy'], fill_value=np.nan)
+    return result
+
+
+def _compute_mix_and_contribution_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute brand mix and margin contribution percentages."""
+    result = df.copy()
+    total_cy_revenue = result['cy_revenue'].sum()
+    total_cy_margin_eur = result['cy_margin_eur'].sum()
+    result['mix_contribution_pct'] = safe_divide(
+        result['cy_revenue'],
+        pd.Series(total_cy_revenue, index=result.index),
+        fill_value=np.nan,
+    )
+    result['margin_contribution_pct'] = safe_divide(
+        result['cy_margin_eur'],
+        pd.Series(total_cy_margin_eur, index=result.index),
+        fill_value=np.nan,
+    )
+    return result
+
+
+def _compute_unit_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """Compute unit economics from CY sales and units."""
+    result = df.copy()
+    result[['cy_units', 'ly_units']] = result[['cy_units', 'ly_units']].fillna(0)
+    result['revenue_per_unit'] = safe_divide(result['cy_revenue'], result['cy_units'], fill_value=np.nan)
+    result['margin_per_unit'] = safe_divide(result['cy_margin_eur'], result['cy_units'], fill_value=np.nan)
+    return result
 
 
 def project_month_end(cy_sales_full: pd.DataFrame, reference_date: date) -> pd.DataFrame:
