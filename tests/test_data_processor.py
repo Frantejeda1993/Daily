@@ -1,5 +1,6 @@
 import io
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 import pandas as pd
@@ -65,6 +66,9 @@ class SafeMaxDateTest(unittest.TestCase):
     def test_safe_max_date_returns_none_when_no_valid_dates(self):
         series = pd.Series(["bad", None])
         self.assertIsNone(safe_max_date(series))
+
+    def test_safe_max_date_handles_scalar_date_input(self):
+        self.assertEqual(safe_max_date(date(2024, 2, 15)), date(2024, 2, 15))
 
 
 class ParseFamiliesIntegrationTest(unittest.TestCase):

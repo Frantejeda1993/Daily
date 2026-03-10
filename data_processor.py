@@ -58,15 +58,23 @@ def validate_reference_date(reference_date: date, data_max_date: date | None) ->
 
 
 def safe_max_date(series: pd.Series) -> date | None:
-    """Safely extract the max date from a Series that may include mixed types."""
+    """Safely extract the max date from a date-like input that may include mixed types."""
     if series is None:
         return None
 
     parsed = pd.to_datetime(series, dayfirst=True, errors='coerce')
-    if parsed.isna().all():
+    parsed_series = parsed if isinstance(parsed, pd.Series) else pd.Series([parsed])
+    if parsed_series.isna().all():
         return None
 
-    return parsed.max().date()
+    max_value = parsed_series.max()
+    if pd.isna(max_value):
+        return None
+    if hasattr(max_value, "date"):
+        return max_value.date()
+    if isinstance(max_value, date):
+        return max_value
+    return pd.to_datetime(max_value, errors='coerce').date()
 
 
 def extract_short_name(familia_str: str) -> str:
