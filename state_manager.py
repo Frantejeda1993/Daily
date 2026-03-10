@@ -66,6 +66,12 @@ class AppState:
         )
 
     def validate(self) -> bool:
+        if self.cy_sales is not None and not isinstance(self.cy_sales, pd.DataFrame):
+            return False
+        if self.ly_sales is not None and not isinstance(self.ly_sales, pd.DataFrame):
+            return False
+        if self.budget is not None and not isinstance(self.budget, pd.DataFrame):
+            return False
         if self.reference_date is None or not isinstance(self.reference_date, date):
             return False
         if self.stock_cy is None or not isinstance(self.stock_cy, dict):
@@ -184,6 +190,11 @@ def rebuild_kpis():
     stk_ly = get_combined_stock(app_state.stock_ly)
 
     if cy is None or ly is None:
+        st.session_state["kpi_table"] = None
+        st.session_state["recap_table"] = None
+        return
+
+    if not isinstance(cy, pd.DataFrame) or not isinstance(ly, pd.DataFrame):
         st.session_state["kpi_table"] = None
         st.session_state["recap_table"] = None
         return
