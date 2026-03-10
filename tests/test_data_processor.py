@@ -11,6 +11,7 @@ from data_processor import (
     normalize_group_names_vectorized,
     _expand_brand_keys,
     parse_families,
+    safe_max_date,
 )
 
 
@@ -54,6 +55,16 @@ class DataProcessorHelpersTest(unittest.TestCase):
                 ('SHOKZ', 'Outdoor Tech'),
             },
         )
+
+
+class SafeMaxDateTest(unittest.TestCase):
+    def test_safe_max_date_handles_string_dates(self):
+        series = pd.Series(["01/01/2024", "31/01/2024", "bad"])
+        self.assertEqual(safe_max_date(series), pd.Timestamp("2024-01-31").date())
+
+    def test_safe_max_date_returns_none_when_no_valid_dates(self):
+        series = pd.Series(["bad", None])
+        self.assertIsNone(safe_max_date(series))
 
 
 class ParseFamiliesIntegrationTest(unittest.TestCase):

@@ -57,6 +57,18 @@ def validate_reference_date(reference_date: date, data_max_date: date | None) ->
     return True
 
 
+def safe_max_date(series: pd.Series) -> date | None:
+    """Safely extract the max date from a Series that may include mixed types."""
+    if series is None:
+        return None
+
+    parsed = pd.to_datetime(series, dayfirst=True, errors='coerce')
+    if parsed.isna().all():
+        return None
+
+    return parsed.max().date()
+
+
 def extract_short_name(familia_str: str) -> str:
     """'300 - FAMILIA SHOKZ' -> 'SHOKZ'  (uppercase, stripped)"""
     if not isinstance(familia_str, str):
@@ -546,8 +558,7 @@ def _compute_unit_metrics(df: pd.DataFrame) -> pd.DataFrame:
 def project_month_end(cy_sales_full: pd.DataFrame, reference_date: date) -> pd.DataFrame:
     import calendar
 
-    data_max_ts = cy_sales_full['fecha'].max() if 'fecha' in cy_sales_full else None
-    data_max_date = data_max_ts.date() if pd.notna(data_max_ts) else None
+    data_max_date = safe_max_date(cy_sales_full['fecha']) if 'fecha' in cy_sales_full else None
     validate_reference_date(reference_date, data_max_date)
 
     days_in_month = calendar.monthrange(reference_date.year, reference_date.month)[1]

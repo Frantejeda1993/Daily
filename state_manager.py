@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from app_settings import AppConfig
-from data_processor import build_recap, lfl_filter, merge_kpis, project_month_end, validate_reference_date
+from data_processor import build_recap, lfl_filter, merge_kpis, project_month_end, safe_max_date, validate_reference_date
 
 MONTHS_ES = AppConfig.get_months()
 GROUPS = ["2 Wheels", "Free Time", "Outdoor Tech"]
@@ -188,8 +188,7 @@ def rebuild_kpis():
         st.session_state["recap_table"] = None
         return
 
-    data_max_ts = cy["fecha"].max() if "fecha" in cy else None
-    data_max_date = data_max_ts.date() if pd.notna(data_max_ts) else None
+    data_max_date = safe_max_date(cy["fecha"]) if "fecha" in cy else None
 
     try:
         validate_reference_date(ref, data_max_date)
