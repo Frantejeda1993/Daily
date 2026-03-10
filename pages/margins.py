@@ -43,9 +43,10 @@ def render(rebuild_fn, groups, group_colors):
         g_ly = g["ly_revenue"].sum()
         g_mg = g["cy_margin_eur"].sum()
         g_pct = safe_divide(g_mg, g_rev, fill_value=0.0)
+        group_color = group_colors.get(grp, group_colors.get("Other", "#888888"))
         with gcols[i]:
             st.markdown(
-                f"<div class='kpi-card' style='border-left-color:{group_colors[grp]}'>"
+                f"<div class='kpi-card' style='border-left-color:{group_color}'>"
                 f"<b>{grp}</b><br>"
                 f"Revenue: <b>{fmt_eur(g_rev)}</b> &nbsp; Margen: <b>{fmt_pct(g_pct)}</b> ({fmt_eur(g_mg)})<br>"
                 f"vs LY: {fmt_delta_html((g_rev - g_ly) / g_ly if g_ly else None)}"

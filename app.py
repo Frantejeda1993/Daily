@@ -6,6 +6,7 @@ from google_auth import login_page
 from pages import config, groups, margins, recap, update
 from persistence import load_persisted_state, save_state
 from state_manager import AppState, GROUPS, GROUP_COLORS, MONTHS_ES, init_session_state, rebuild_kpis
+from ui_navigation import build_tab_index_map, build_tab_labels
 
 st.set_page_config(
     page_title="KPI Dashboard",
@@ -51,20 +52,18 @@ if st.session_state.get("cy_sales") is None:
     with st.spinner("Cargando datos guardados..."):
         load_persisted_state(rebuild_kpis)
 
-tab_labels = ["Margenes", "Recap", "2 Wheels", "Free Time", "Outdoor Tech", "Configuracion", "Actualizacion"]
-tab0, tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(tab_labels)
+tab_labels = build_tab_labels(GROUPS)
+tab_index = build_tab_index_map(GROUPS)
+tabs = st.tabs(tab_labels)
 
-with tab0:
+with tabs[tab_index["Margenes"]]:
     margins.render(rebuild_kpis, GROUPS, GROUP_COLORS)
-with tab1:
+with tabs[tab_index["Recap"]]:
     recap.render(GROUP_COLORS)
-with tab2:
-    groups.render_group("2 Wheels")
-with tab3:
-    groups.render_group("Free Time")
-with tab4:
-    groups.render_group("Outdoor Tech")
-with tab5:
+for group_name in GROUPS:
+    with tabs[tab_index[group_name]]:
+        groups.render_group(group_name)
+with tabs[tab_index["Configuracion"]]:
     config.render(GROUPS, MONTHS_ES, save_state, rebuild_kpis)
-with tab6:
+with tabs[tab_index["Actualizacion"]]:
     update.render(MONTHS_ES, save_state, rebuild_kpis)
